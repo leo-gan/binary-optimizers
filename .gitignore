@@ -1,0 +1,17 @@
+cifar-10-batches-py/
+
+__pycache__/
+*.py[cod]
+*.pyd
+
+.venv/
+.idea/
+
+*.egg-info/
+build/
+dist/
+
+.pytest_cache/
+.ruff_cache/
+
+cifar-10-python.tar.gz

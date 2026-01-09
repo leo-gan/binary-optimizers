@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "binary-optimizers"
+version = "0.1.0"
+description = "Binary / sign-based optimizers and benchmark harnesses"
+requires-python = ">=3.12"
+dependencies = [
+  "numpy",
+  "torch",
+]
+
+[project.optional-dependencies]
+bench = [
+  "torchvision",
+]
+
+[dependency-groups]
+dev = [
+  "ruff",
+  "pytest",
+]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch" }
+torchvision = { index = "pytorch" }
+
+[project.scripts]
+benchmark-cifar10 = "binary_optimizers.cli:benchmark_cifar10"
+benchmark-mnist = "binary_optimizers.cli:benchmark_mnist"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["binary_optimizers*"]
