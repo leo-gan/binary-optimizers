@@ -4,6 +4,15 @@ Source: `experiments/Benchmarking Voting Optimizer vs STE on CIFAR-10.md`
 
 This document summarizes the neural network architectures and building-block layers defined and discussed in the source note.
 
+## Design goals (as stated in the note)
+
+Across the versions in the note, the binary-network designs are motivated by:
+
+- **Binary forward path**: use `sign()` or swarm-majority voting so effective weights are 1-bit.
+- **Trainability**: preserve a gradient path (STE-style proxies or normalized swarm sums) so learning can progress.
+- **Stability**: avoid destructive in-place binarization and reduce discontinuities that cause chaotic gradients.
+- **Reduced reliance on floating-point ops**: explore replacing BatchNorm and float-style optimizer arithmetic with simpler thresholding/centering and bit-centric mechanisms.
+
 ## CIFAR-10: `SmallConvNet` (initial version)
 
 The note defines a small convnet for CIFAR-10 with:
@@ -18,6 +27,29 @@ The note defines a small convnet for CIFAR-10 with:
 Binarization behavior in this initial version:
 
 - When `binary=True`, it calls `_binarize()` which **mutates** parameters in-place using `p.data.sign()`.
+
+### Why this exists
+
+This is the minimal CIFAR-10 baseline in the note: a tiny convnet with an option to binarize weights.
+
+### How it works (intuition)
+
+- Forward: uses standard convolution / pooling / ReLU layers.
+- If `binary=True`, weights are forced to `{-1, +1}` before the forward computations by overwriting `p.data`.
+
+### Better than its ancestor
+
+As a starting point, it provides an easy way to test the effect of sign weights on a small model.
+
+### Pros
+
+- Very simple and explicit.
+- Makes it obvious whether the network is using sign weights.
+
+### Cons
+
+- In-place mutation of `p.data` breaks the notion of latent float weights.
+- Can interfere with optimizers expecting float-valued parameters and can destabilize training.
 
 ## CIFAR-10: `SmallConvNet` (STE-style non-destructive binarization)
 
@@ -39,6 +71,32 @@ Instead of using module calls that read `module.weight` implicitly, the forward 
 - raw float weights when `binary=False`.
 
 The architecture stays the same shape (two conv + two FC), but avoids in-place `p.data` mutation.
+
+### Why this was implemented
+
+The note states that "problems with binarization" were fixed by switching to a non-destructive STE-style binarization in forward. This is intended to keep gradients flowing to float weights while still performing binary inference.
+
+### How it works (intuition)
+
+- Compute binarized weights for forward only.
+- Use the STE trick so backprop treats the binarization as identity for gradients.
+- Use functional layers (`F.conv2d`, `F.linear`) to supply the chosen weights explicitly.
+
+### Better than its ancestor
+
+Compared to the initial `SmallConvNet`:
+
+- avoids overwriting `p.data` with signs, and
+- makes the forward binarization compatible with optimizers that update float weights.
+
+### Pros
+
+- Much better optimizer compatibility (float weights remain float).
+- Clear separation between "latent storage" and "binary forward".
+
+### Cons
+
+- Slightly more complex forward path (functional ops + explicit weight selection).
 
 ## MNIST / MLP: `BitLinearSTE` + `create_model()`
 
@@ -64,6 +122,29 @@ A sequential model:
 
 Several sections use this same pattern with different hidden sizes (e.g. 128, 512).
 
+### Why this exists
+
+The note uses this as a fast-to-run reference setting (MNIST) to validate optimizer ideas and training stability for 1-bit linear layers.
+
+### How it works (intuition)
+
+- Each `BitLinearSTE` stores float weights but uses their sign in the forward pass.
+- The STE proxy ensures gradients update the latent float weights.
+- BatchNorm is described in the note as "critical" to make the 1-bit model converge.
+
+### Better than its ancestor
+
+Compared to using `sign(weight)` directly (with no STE proxy), the STE proxy preserves a gradient path.
+
+### Pros
+
+- Simple, small architecture useful for debugging optimizer behavior.
+- Demonstrates the STE pattern cleanly.
+
+### Cons
+
+- Relies on floating-point BatchNorm (the note later attempts to remove this "crutch").
+
 ### Larger model (`create_large_model()`)
 
 Used in the note’s memory measurement:
@@ -77,9 +158,38 @@ Used in the note’s memory measurement:
 - `ReLU()`
 - `BitLinearSTE(1024, 10)`
 
+### Why this exists
+
+The note uses a larger model to make optimizer memory-state differences more measurable.
+
+### Pros
+
+- Makes memory/overhead differences easier to observe.
+
+### Cons
+
+- Less of a minimal debug setting; slower and heavier.
+
 ## Swarm-weight layers ("32 agents per weight")
 
 The note introduces a swarm representation where a single logical weight is represented by a population of bits with `swarm_size=32`.
+
+### Why this exists
+
+The note motivates this as an "equal information volume" comparison:
+
+- Standard: 1 float32 weight (32 bits) per connection.
+- Swarm: 32 binary agents (32 bits) per connection.
+
+The swarm representation is then used to explore bit-flip style learning.
+
+### Pros
+
+- Makes the bit-population concept explicit in the parameterization.
+
+### Cons
+
+- Adds an extra dimension to parameters, complicating both layers and optimizers.
 
 ## `BitSwarmLinear`
 
@@ -94,6 +204,19 @@ Defined for the "equal memory" comparison:
 
 This yields an effective 1-bit weight (`w_eff`) but keeps a sum-based proxy for gradient flow.
 
+### How it works (intuition)
+
+- The population vote produces a majority-sign weight.
+- The proxy uses a sum-like path so gradients can influence the underlying population.
+
+### Pros
+
+- Majority vote provides a built-in nonlinearity/discreteness.
+
+### Cons
+
+- Tie handling (`0 -> 1`) is an explicit design choice and can bias behavior.
+
 ## `BitSwarmLogicLinear` (bit-physics / logic framing)
 
 Multiple variants appear throughout the note:
@@ -103,9 +226,29 @@ Multiple variants appear throughout the note:
   - use a **majority vote proxy** (STE-style: `w_norm + (w_eff - w_norm).detach()`), or
   - use an **analog/normalized output** `w_normalized = swarm_sum / swarm_size` directly ("Analog Sum, Binary Storage"), producing 33 discrete output levels.
 
+### Why these variants appear
+
+The note discusses failure modes when the forward path is too discontinuous:
+
+- When the output is strictly `sign(swarm_sum)`, a single bit flip can change the effective output dramatically.
+
+To address this, the note introduces an "analog sum" forward path where each bit flip changes the output by `1/swarm_size`.
+
+### Pros
+
+- Analog/normalized outputs provide smoother signal changes with still-binary storage.
+
+### Cons
+
+- Some variants attempt to store int8 populations, but the note hits framework constraints around gradients for non-float tensors.
+
 ## Normalization / homeostasis modules
 
 The note replaces or complements BatchNorm with simpler thresholding/centering mechanisms in several sections.
+
+### Why these exist
+
+The note explicitly tries to remove BatchNorm (division/sqrt) and replace it with simpler counter-like mechanisms that keep neuron activity in a useful range.
 
 ## `HomeostaticThreshold`
 
@@ -119,6 +262,14 @@ The note presents variants including:
 - activity-based (targeting a firing rate around 50%), and
 - mean-matching behavior using a running mean.
 
+### Pros
+
+- Provides an adaptive offset to keep activations centered or maintain firing rates.
+
+### Cons
+
+- Still introduces stateful dynamics and hyperparameters; behavior depends on update rules.
+
 ## `SimpleCentering`
 
 A minimal centering layer:
@@ -128,6 +279,14 @@ A minimal centering layer:
 
 Presented as a simpler alternative to BatchNorm / homeostasis.
 
+### Pros
+
+- Extremely simple.
+
+### Cons
+
+- Lacks variance normalization; may be insufficient for stability compared to BatchNorm.
+
 ## `HomeostaticScaleShift`
 
 A scale-and-shift normalization module:
@@ -136,6 +295,18 @@ A scale-and-shift normalization module:
 - Uses `gain` initialized using `1/sqrt(fan_in)` (as written in the note).
 - Forward: `out = (x - threshold) * gain`.
 - During training, updates `threshold` based on batch mean with a configurable learning rate.
+
+### Why this exists
+
+This layer adds scaling (gain) to complement thresholding so the network can keep signals in a usable range without full BatchNorm.
+
+### Pros
+
+- More expressive than a pure centering layer.
+
+### Cons
+
+- Still uses float-valued parameters and floating-point arithmetic.
 
 ## Example "equal information volume" architectures
 
@@ -148,3 +319,11 @@ motivated by:
 
 - Standard model: 1 FP32 weight (32 bits) per connection.
 - Swarm model: 32 binary agents (32 bits) per connection.
+
+### Pros
+
+- Provides a controlled comparison between representations under a matched "bits per connection" framing.
+
+### Cons
+
+- Even if information volume matches, runtime/memory layout and training dynamics differ substantially between float and swarm representations.
