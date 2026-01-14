@@ -2,7 +2,7 @@
 
 This folder contains documentation extracted from:
 
-- `experiments/Benchmarking Voting Optimizer vs STE on CIFAR-10.md`
+- `Benchmarking Voting Optimizer vs STE on CIFAR-10.md`
 
 The docs are organized to capture:
 

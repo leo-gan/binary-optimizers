@@ -9,12 +9,12 @@ description = "Binary / sign-based optimizers and benchmark harnesses"
 requires-python = ">=3.12"
 dependencies = [
   "numpy",
-  "torch",
+  "torch>=2.8.0,<2.9",
 ]
 
 [project.optional-dependencies]
 bench = [
-  "torchvision",
+  "torchvision>=0.23.0,<0.24",
 ]
 
 [dependency-groups]
