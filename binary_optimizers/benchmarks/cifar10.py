@@ -9,14 +9,21 @@ from binary_optimizers.models.cifar import SmallBitConvNet, SmallConvNetSTE
 from binary_optimizers.optimizers.signum import MomentumVotingOptimizer
 from binary_optimizers.optimizers.ste import STEOptimizer
 from binary_optimizers.optimizers.voting import VotingOptimizer
-from binary_optimizers.training.loops import evaluate_accuracy, set_seed, train_one_epoch_classification
+from binary_optimizers.optimizers.threshold_if import ThresholdedIntegrateFireOptimizer
+from binary_optimizers.training.loops import (
+    evaluate_accuracy,
+    set_seed,
+    train_one_epoch_classification,
+)
 
 
 @dataclass
 class RunResult:
-    train_acc: List[float]
-    test_acc: List[float]
-    epoch_time_s: List[float]
+    train_acc_mean: List[float]
+    test_acc_mean: List[float]
+    test_acc_std: List[float]
+    epoch_time_mean: List[float]
+    trials: int
 
 
 def _make_optimizer(name: str, params):
@@ -26,6 +33,14 @@ def _make_optimizer(name: str, params):
         return VotingOptimizer(params, lr=0.1, momentum=0.9, push_rate=0.3, clip=1.0)
     if name == "signum":
         return MomentumVotingOptimizer(params, lr=2e-3, momentum=0.9, clip=1.2)
+    if name == "signum_conf":
+        return MomentumVotingOptimizer(
+            params, lr=2e-3, momentum=0.9, clip=1.2, confidence_threshold=0.001
+        )
+    if name == "threshold_if":
+        return ThresholdedIntegrateFireOptimizer(
+            params, lr=0.1, threshold=0.02, decay=0.99
+        )
     if name == "adam":
         return torch.optim.Adam(params, lr=1e-3)
 
@@ -45,13 +60,12 @@ def run_cifar10_benchmark(
     *,
     runs: Dict[str, Dict[str, str]],
     epochs: int = 5,
+    num_trials: int = 1,
     seed: int = 42,
     device: Optional[str] = None,
     data_root: str = ".",
     num_workers: int = 2,
 ) -> Dict[str, RunResult]:
-    set_seed(seed)
-
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     pin_memory = device != "cpu"
 
@@ -66,31 +80,44 @@ def run_cifar10_benchmark(
     results: Dict[str, RunResult] = {}
 
     for run_name, cfg in runs.items():
-        model_name = cfg["model"]
-        optimizer_name = cfg["optimizer"]
+        print(f"\n--- Running: {run_name} ({num_trials} trials) ---")
+        all_train_accs = torch.zeros((num_trials, epochs))
+        all_test_accs = torch.zeros((num_trials, epochs))
+        all_times = torch.zeros((num_trials, epochs))
 
-        model = _make_model(model_name).to(device)
-        optimizer = _make_optimizer(optimizer_name, model.parameters())
+        for trial in range(num_trials):
+            set_seed(seed + trial)
+            model_name = cfg["model"]
+            optimizer_name = cfg["optimizer"]
 
-        train_accs: List[float] = []
-        test_accs: List[float] = []
-        times: List[float] = []
+            model = _make_model(model_name).to(device)
+            optimizer = _make_optimizer(optimizer_name, model.parameters())
 
-        for epoch in range(epochs):
-            t0 = time.time()
-            train_acc = train_one_epoch_classification(model, optimizer, train_loader, device)
-            t1 = time.time()
-            test_acc = evaluate_accuracy(model, test_loader, device)
+            for epoch in range(epochs):
+                t0 = time.time()
+                train_acc = train_one_epoch_classification(
+                    model, optimizer, train_loader, device
+                )
+                t1 = time.time()
+                test_acc = evaluate_accuracy(model, test_loader, device)
 
-            train_accs.append(train_acc)
-            test_accs.append(test_acc)
-            times.append(t1 - t0)
+                all_train_accs[trial, epoch] = train_acc
+                all_test_accs[trial, epoch] = test_acc
+                all_times[trial, epoch] = t1 - t0
 
-            print(
-                f"{run_name} | epoch {epoch + 1:02d}/{epochs} | "
-                f"train={train_acc:.4f} test={test_acc:.4f} time={times[-1]:.1f}s"
-            )
+                print(
+                    f"Trial {trial + 1}/{num_trials} | Epoch {epoch + 1:02d}/{epochs} | "
+                    f"train={train_acc:.4f} test={test_acc:.4f} time={t1 - t0:.1f}s"
+                )
 
-        results[run_name] = RunResult(train_acc=train_accs, test_acc=test_accs, epoch_time_s=times)
+        results[run_name] = RunResult(
+            train_acc_mean=all_train_accs.mean(dim=0).tolist(),
+            test_acc_mean=all_test_accs.mean(dim=0).tolist(),
+            test_acc_std=all_test_accs.std(dim=0).tolist()
+            if num_trials > 1
+            else [0.0] * epochs,
+            epoch_time_mean=all_times.mean(dim=0).tolist(),
+            trials=num_trials,
+        )
 
     return results
