@@ -33,6 +33,14 @@ def _optimizer_state_nbytes(optimizer: torch.optim.Optimizer) -> dict[str, Any]:
     n_tensors = 0
     details: list[dict[str, Any]] = []
     for p, state in optimizer.state.items():
+        # Standard PyTorch state is Parameter → dict; skip non-dict values.
+        if not isinstance(state, dict):
+            if torch.is_tensor(state):
+                nb = tensor_nbytes(state)
+                total += nb
+                n_tensors += 1
+                details.append({"key": str(p), "shape": list(state.shape), "bytes": nb})
+            continue
         for key, val in state.items():
             if torch.is_tensor(val):
                 nb = tensor_nbytes(val)

@@ -4,6 +4,7 @@
 from pathlib import Path
 
 from binary_optimizers.benchmarks.inference_bench import run_inference_benchmark
+from binary_optimizers.benchmarks.new_optimizer_report import write_new_optimizer_report
 from binary_optimizers.benchmarks.pareto import run_pareto_analysis
 from binary_optimizers.benchmarks.training_sweep import run_training_sweep
 
@@ -26,9 +27,11 @@ This work adds:
    inference footprint in float / int8 / bitpacked form with compression ratios.
 3. **Inference benchmarks** — float vs sign-weight float vs packed binary across
    batch sizes, plus swarm full-population vs majority-vote cache.
-4. **Training sweep (scaffold)** — all optimizer × model combinations with
-   multi-trial stats, epoch curves, wall time, and memory.
+4. **Training sweep (scaffold)** — baseline and **four new** optimizers × models
+   with multi-trial stats, epoch curves, wall time, and memory.
 5. **Pareto analysis** — accuracy vs inference memory/speed and training efficiency.
+6. **New optimizer proofs** — sequential design rationale and accuracy win matrix
+   (see `results/new_optimizers_report.md` and `docs/NEW_OPTIMIZERS.md`).
 
 > **Scaffolding note:** epochs, batches, and benchmark iterations are intentionally
 > small so the analytics pipeline is end-to-end without full training cost.
@@ -42,6 +45,8 @@ This work adds:
 | STE SGD | Medium | Bitpacked | Clamps weights to [-1,1] |
 | Voting / Signum | Medium–high (accumulators / momentum) | Bitpacked | Discrete flip dynamics |
 | Threshold IF | Medium (accumulators) | Bitpacked | Event-driven flips |
+| EMAFlip / CosineVoting / SparseSign | Medium (EMA or momentum) | Bitpacked | New optimizers |
+| HybridAccumulator | Medium–high (EMA + accumulator) | Bitpacked | Adaptive fire rate |
 | Swarm | High (population × S) | Bitpacked via majority | Training stores S bits/weight |
 
 **Key trade-off:** swarm training multiplies parameter memory by population size,
@@ -55,11 +60,17 @@ but inference can cache the majority vote and match STE bitpacked size.
 
 ### Training sweep (see `results/training_sweep.json`)
 
-Configs run: all STE small/large MLP optimizers, swarm, and CIFAR Adam/Signum/STE.
+Configs: baselines (adam/ste/voting/signum/threshold_if/swarm) **and** new
+optimizers (`ema_flip`, `cosine_voting`, `sparse_sign`, `hybrid_accumulator`)
+on small/large MNIST Bit-MLP, plus CIFAR Adam/Signum/STE.
 
 ### Pareto (see `results/pareto_analysis.md`)
 
 {pareto_excerpt}
+
+### New optimizers (see `docs/NEW_OPTIMIZERS.md`)
+
+{new_opt_excerpt}
 
 ## How to reproduce
 
@@ -81,9 +92,12 @@ uv run python experiments/run_pareto_analysis.py
 | :--- | :--- |
 | `binary_optimizers/inference/` | Pack/unpack, XNOR+popcount linear, weight extract |
 | `binary_optimizers/profiling/` | Training + inference memory profiler |
+| `binary_optimizers/optimizers/ema_flip.py` etc. | Four new optimizers |
 | `binary_optimizers/benchmarks/training_sweep.py` | Multi-config training harness |
 | `binary_optimizers/benchmarks/inference_bench.py` | Inference mode benchmarks |
 | `binary_optimizers/benchmarks/pareto.py` | Combined Pareto analysis |
+| `binary_optimizers/benchmarks/new_optimizer_report.py` | Win matrix / sequential proofs |
+| `tests/test_new_optimizers.py` | New optimizer unit tests |
 | `tests/test_packing.py` | Packing round-trip tests |
 | `tests/test_binary_linear.py` | Binary forward ≡ F.linear(sign x, sign w) |
 | `tests/test_memory_profiler.py` | Profiler tests |
@@ -91,9 +105,15 @@ uv run python experiments/run_pareto_analysis.py
 '''
 
 
-def write_summary(pareto_md: Path, inference_md: Path, out: Path) -> None:
+def write_summary(
+    pareto_md: Path,
+    inference_md: Path,
+    new_opt_md: Path,
+    out: Path,
+) -> None:
     inf_text = inference_md.read_text() if inference_md.exists() else "_pending_"
     par_text = pareto_md.read_text() if pareto_md.exists() else "_pending_"
+    new_text = new_opt_md.read_text() if new_opt_md.exists() else "_pending_"
 
     # Pull key tables (skip titles)
     def excerpt(text: str, max_lines: int = 40) -> str:
@@ -105,7 +125,8 @@ def write_summary(pareto_md: Path, inference_md: Path, out: Path) -> None:
 
     body = SUMMARY_TEMPLATE.format(
         inference_excerpt=excerpt(inf_text, 35),
-        pareto_excerpt=excerpt(par_text, 50),
+        pareto_excerpt=excerpt(par_text, 55),
+        new_opt_excerpt=excerpt(new_text, 60),
     )
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(body)
@@ -113,7 +134,7 @@ def write_summary(pareto_md: Path, inference_md: Path, out: Path) -> None:
 
 
 def main() -> None:
-    print("=== 1/3 Inference benchmark (scaffold) ===")
+    print("=== 1/4 Inference benchmark (scaffold) ===")
     run_inference_benchmark(
         batch_sizes=[1, 8, 32],
         warmup=2,
@@ -122,16 +143,18 @@ def main() -> None:
         output_json="results/inference_benchmark.json",
     )
 
-    print("\n=== 2/3 Training sweep (scaffold) ===")
+    print("\n=== 2/4 Training sweep (scaffold, incl. new optimizers) ===")
+    # Slightly longer than micro-scaffold so EMA warm-up / voting dynamics show up,
+    # while remaining far short of full training.
     run_training_sweep(
-        epochs=2,
+        epochs=6,
         num_trials=2,
-        max_train_batches=3,
-        max_test_batches=2,
+        max_train_batches=8,
+        max_test_batches=4,
         output_json="results/training_sweep.json",
     )
 
-    print("\n=== 3/3 Pareto analysis ===")
+    print("\n=== 3/4 Pareto analysis ===")
     run_pareto_analysis(
         training_json="results/training_sweep.json",
         inference_json="results/inference_benchmark.json",
@@ -139,9 +162,23 @@ def main() -> None:
         output_json="results/pareto_analysis.json",
     )
 
+    print("\n=== 4/4 New optimizer improvement report ===")
+    write_new_optimizer_report(
+        training_json="results/training_sweep.json",
+        output_md="results/new_optimizers_report.md",
+        output_json="results/new_optimizers_report.json",
+        model="bit_mlp_small",
+    )
+    # Promote to docs/
+    Path("docs/NEW_OPTIMIZERS.md").write_text(
+        Path("results/new_optimizers_report.md").read_text()
+    )
+    print("Wrote docs/NEW_OPTIMIZERS.md")
+
     write_summary(
         Path("results/pareto_analysis.md"),
         Path("results/inference_benchmark.md"),
+        Path("results/new_optimizers_report.md"),
         Path("docs/END_TO_END_SUMMARY.md"),
     )
     # also copy key report

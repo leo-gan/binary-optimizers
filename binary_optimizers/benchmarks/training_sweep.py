@@ -23,7 +23,11 @@ from binary_optimizers.models.mnist import (
     create_mnist_bit_mlp_large,
     create_mnist_swarm_mlp,
 )
+from binary_optimizers.optimizers.cosine_voting import CosineVotingOptimizer
+from binary_optimizers.optimizers.ema_flip import EMAFlipOptimizer
+from binary_optimizers.optimizers.hybrid_accumulator import HybridAccumulatorOptimizer
 from binary_optimizers.optimizers.signum import MomentumVotingOptimizer
+from binary_optimizers.optimizers.sparse_sign import SparseSignOptimizer
 from binary_optimizers.optimizers.ste import STEOptimizer
 from binary_optimizers.optimizers.swarm import SwarmOptimizer
 from binary_optimizers.optimizers.threshold_if import ThresholdedIntegrateFireOptimizer
@@ -33,6 +37,14 @@ from binary_optimizers.training.loops import (
     evaluate_accuracy,
     set_seed,
     train_one_epoch_classification,
+)
+
+# Optimizers introduced to improve on the baseline suite (scaffold experiments).
+NEW_OPTIMIZER_NAMES = (
+    "ema_flip",
+    "cosine_voting",
+    "sparse_sign",
+    "hybrid_accumulator",
 )
 
 
@@ -108,6 +120,34 @@ def _make_optimizer(name: str, model: nn.Module) -> torch.optim.Optimizer:
         )
     if name == "swarm":
         return SwarmOptimizer(params, recruit_rate=50.0, bn_lr=0.01)
+    # New optimizers (sequential improvements over voting / IF / sign baselines)
+    if name == "ema_flip":
+        return EMAFlipOptimizer(
+            params, lr=0.008, momentum=0.9, threshold_scale=0.5, clip=1.5
+        )
+    if name == "cosine_voting":
+        return CosineVotingOptimizer(
+            params,
+            lr_max=0.01,
+            lr_min=0.002,
+            momentum=0.9,
+            total_steps=400,
+            clip=1.5,
+            confidence_threshold=0.0005,
+        )
+    if name == "sparse_sign":
+        return SparseSignOptimizer(
+            params, lr=0.006, momentum=0.9, density=0.6, clip=1.5
+        )
+    if name == "hybrid_accumulator":
+        return HybridAccumulatorOptimizer(
+            params,
+            lr=0.005,
+            momentum=0.9,
+            init_threshold=0.003,
+            target_fire_rate=0.5,
+            clip=1.5,
+        )
     raise ValueError(f"Unknown optimizer: {name}")
 
 
@@ -127,18 +167,28 @@ def _make_model(name: str) -> nn.Module:
 
 # Scaffolding configs: all required combinations, short runs.
 DEFAULT_SWEEP_CONFIGS: list[dict[str, str]] = [
-    # STE-based small MLP × optimizers
+    # STE-based small MLP × baseline optimizers
     {"name": "mnist_small_adam", "dataset": "mnist", "model": "bit_mlp_small", "optimizer": "adam"},
     {"name": "mnist_small_ste", "dataset": "mnist", "model": "bit_mlp_small", "optimizer": "ste"},
     {"name": "mnist_small_voting", "dataset": "mnist", "model": "bit_mlp_small", "optimizer": "voting"},
     {"name": "mnist_small_signum", "dataset": "mnist", "model": "bit_mlp_small", "optimizer": "signum"},
     {"name": "mnist_small_threshold_if", "dataset": "mnist", "model": "bit_mlp_small", "optimizer": "threshold_if"},
-    # STE-based large MLP × optimizers
+    # New optimizers on small MLP (primary comparison surface)
+    {"name": "mnist_small_ema_flip", "dataset": "mnist", "model": "bit_mlp_small", "optimizer": "ema_flip"},
+    {"name": "mnist_small_cosine_voting", "dataset": "mnist", "model": "bit_mlp_small", "optimizer": "cosine_voting"},
+    {"name": "mnist_small_sparse_sign", "dataset": "mnist", "model": "bit_mlp_small", "optimizer": "sparse_sign"},
+    {"name": "mnist_small_hybrid_accumulator", "dataset": "mnist", "model": "bit_mlp_small", "optimizer": "hybrid_accumulator"},
+    # STE-based large MLP × baseline optimizers
     {"name": "mnist_large_adam", "dataset": "mnist", "model": "bit_mlp_large", "optimizer": "adam"},
     {"name": "mnist_large_ste", "dataset": "mnist", "model": "bit_mlp_large", "optimizer": "ste"},
     {"name": "mnist_large_voting", "dataset": "mnist", "model": "bit_mlp_large", "optimizer": "voting"},
     {"name": "mnist_large_signum", "dataset": "mnist", "model": "bit_mlp_large", "optimizer": "signum"},
     {"name": "mnist_large_threshold_if", "dataset": "mnist", "model": "bit_mlp_large", "optimizer": "threshold_if"},
+    # New optimizers on large MLP
+    {"name": "mnist_large_ema_flip", "dataset": "mnist", "model": "bit_mlp_large", "optimizer": "ema_flip"},
+    {"name": "mnist_large_cosine_voting", "dataset": "mnist", "model": "bit_mlp_large", "optimizer": "cosine_voting"},
+    {"name": "mnist_large_sparse_sign", "dataset": "mnist", "model": "bit_mlp_large", "optimizer": "sparse_sign"},
+    {"name": "mnist_large_hybrid_accumulator", "dataset": "mnist", "model": "bit_mlp_large", "optimizer": "hybrid_accumulator"},
     # Swarm
     {"name": "mnist_swarm", "dataset": "mnist", "model": "swarm_mlp", "optimizer": "swarm"},
     # CIFAR-10 convnets

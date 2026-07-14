@@ -50,10 +50,11 @@ class CosineVotingOptimizer(torch.optim.Optimizer):
                         total_steps=total_steps, clip=clip,
                         confidence_threshold=confidence_threshold, bn_lr=bn_lr)
         super().__init__(params, defaults)
-        self.state["global_step"] = 0
+        # Instance attribute (not optimizer.state): state maps Parameter → dict only.
+        self.global_step = 0
 
     def _cosine_lr(self, group) -> float:
-        t = self.state["global_step"]
+        t = self.global_step
         T = group["total_steps"]
         lr_max = group["lr_max"]
         lr_min = group["lr_min"]
@@ -103,5 +104,5 @@ class CosineVotingOptimizer(torch.optim.Optimizer):
                 p.data.add_(vote, alpha=-lr)
                 p.data.clamp_(-clip, clip)
 
-        self.state["global_step"] += 1
+        self.global_step += 1
         return loss

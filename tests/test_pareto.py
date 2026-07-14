@@ -22,11 +22,17 @@ def test_pareto_front_simple():
 
 
 def test_sweep_config_coverage():
-    from binary_optimizers.benchmarks.training_sweep import DEFAULT_SWEEP_CONFIGS
+    from binary_optimizers.benchmarks.training_sweep import (
+        DEFAULT_SWEEP_CONFIGS,
+        NEW_OPTIMIZER_NAMES,
+    )
 
     names = {c["name"] for c in DEFAULT_SWEEP_CONFIGS}
     # small + large STE optimizers
     for opt in ("adam", "ste", "voting", "signum", "threshold_if"):
+        assert f"mnist_small_{opt}" in names
+        assert f"mnist_large_{opt}" in names
+    for opt in NEW_OPTIMIZER_NAMES:
         assert f"mnist_small_{opt}" in names
         assert f"mnist_large_{opt}" in names
     assert "mnist_swarm" in names
