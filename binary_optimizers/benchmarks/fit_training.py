@@ -21,6 +21,7 @@ from binary_optimizers.models.mnist import create_mnist_bit_mlp, create_mnist_bi
 from binary_optimizers.optimizers.cosine_voting import CosineVotingOptimizer
 from binary_optimizers.optimizers.ema_flip import EMAFlipOptimizer
 from binary_optimizers.optimizers.hybrid_accumulator import HybridAccumulatorOptimizer
+from binary_optimizers.optimizers.hybrid_v2 import HybridV2Optimizer
 from binary_optimizers.optimizers.signum import MomentumVotingOptimizer
 from binary_optimizers.optimizers.sparse_sign import SparseSignOptimizer
 from binary_optimizers.optimizers.ste import STEOptimizer
@@ -35,6 +36,7 @@ from binary_optimizers.training.checkpoints import (
     load_meta,
     save_checkpoint,
 )
+from binary_optimizers.training.dual_optimizer import DualOptimizer
 from binary_optimizers.training.loops import (
     evaluate_accuracy,
     set_seed,
@@ -53,6 +55,7 @@ FIT_OPTIMIZERS = (
     "cosine_voting",
     "sparse_sign",
     "hybrid_accumulator",
+    "hybrid_v2",
 )
 
 NEW_OPTIMIZERS = (
@@ -60,10 +63,13 @@ NEW_OPTIMIZERS = (
     "cosine_voting",
     "sparse_sign",
     "hybrid_accumulator",
+    "hybrid_v2",
 )
 
-# Tag identifies this experiment series (bump via schema when optimizers change).
-FIT_TAG = "fit_v2"
+# Tag/schema: bump when training protocol or optimizer defaults change.
+FIT_TAG = "fit_v3"
+# BN continuous params optimized with Adam alongside binary optimizers.
+BN_ADAM_LR = 1e-3
 
 
 @dataclass
@@ -152,24 +158,37 @@ def default_optimizer_kwargs(
     if name == "adam":
         return {"lr": 1e-3}
     if name == "ste":
-        return {"lr": 0.1, "momentum": 0.9}
+        return {"lr": 0.1, "momentum": 0.9, "bn_adam_lr": BN_ADAM_LR}
     if name == "voting":
-        return {"lr": 0.1, "momentum": 0.9, "push_rate": 0.3, "clip": 1.0}
+        return {
+            "lr": 0.1,
+            "momentum": 0.9,
+            "push_rate": 0.3,
+            "clip": 1.0,
+            "bn_adam_lr": BN_ADAM_LR,
+        }
     if name == "signum":
-        return {"lr": 5e-3, "momentum": 0.9, "clip": 1.5}
+        return {"lr": 5e-3, "momentum": 0.9, "clip": 1.5, "bn_adam_lr": BN_ADAM_LR}
     if name == "threshold_if":
-        return {"lr": 0.1, "threshold": 0.02, "decay": 0.99}
+        return {
+            "lr": 0.1,
+            "threshold": 0.02,
+            "decay": 0.99,
+            "bn_adam_lr": BN_ADAM_LR,
+        }
     if name == "ema_flip":
         return {
-            "lr": 0.05,
-            "lr_min": 0.005,
+            "lr": 0.06,
+            "lr_min": 0.004,
             "momentum": 0.9,
-            "threshold_scale": 0.35,
+            "threshold_scale": 0.30,
             "clip": 1.5,
             "flip_mode": False,
             "total_steps": total_steps,
+            "bn_adam_lr": BN_ADAM_LR,
         }
     if name == "cosine_voting":
+        # Milder restarts: one mid restart, less volatile than period=T/3
         return {
             "lr_max": 0.1,
             "lr_min": 0.005,
@@ -177,7 +196,8 @@ def default_optimizer_kwargs(
             "total_steps": total_steps,
             "clip": 1.5,
             "confidence_threshold": 0.0,
-            "restart_period": max(1, total_steps // 3),
+            "restart_period": 0,  # single cosine — more stable for fit
+            "bn_adam_lr": BN_ADAM_LR,
         }
     if name == "sparse_sign":
         return {
@@ -185,10 +205,11 @@ def default_optimizer_kwargs(
             "momentum": 0.9,
             "density": 0.8,
             "density_start": 1.0,
-            "density_end": 0.4,
+            "density_end": 0.45,
             "total_steps": total_steps,
             "clip": 1.5,
             "magnitude_biased": True,
+            "bn_adam_lr": BN_ADAM_LR,
         }
     if name == "hybrid_accumulator":
         return {
@@ -200,7 +221,63 @@ def default_optimizer_kwargs(
             "clip": 1.5,
             "soft_fire": True,
             "soft_alpha": 0.5,
+            "bn_adam_lr": BN_ADAM_LR,
         }
+    if name == "hybrid_v2":
+        # Momentum + cosine LR + mild sparse + soft IF fire
+        return {
+            "lr_max": 0.12,
+            "lr_min": 0.008,
+            "total_steps": total_steps,
+            "momentum": 0.9,
+            "threshold": 0.04,
+            "decay": 0.97,
+            "density": 0.9,
+            "soft_fire": True,
+            "soft_alpha": 0.65,
+            "use_fire": True,
+            "clip": 1.5,
+            "confidence_threshold": 0.0,
+            "bn_adam_lr": BN_ADAM_LR,
+        }
+    raise ValueError(f"Unknown optimizer: {name}")
+
+
+def _make_binary_optimizer(
+    name: str,
+    params,
+    kwargs: dict[str, Any],
+) -> torch.optim.Optimizer:
+    """Build optimizer for binary (2D) weights only; strip dual-only keys."""
+    kw = {k: v for k, v in kwargs.items() if k != "bn_adam_lr"}
+    if name == "ste":
+        return STEOptimizer(params, lr=kw["lr"], momentum=kw["momentum"])
+    if name == "voting":
+        return VotingOptimizer(
+            params,
+            lr=kw["lr"],
+            momentum=kw["momentum"],
+            push_rate=kw["push_rate"],
+            clip=kw["clip"],
+        )
+    if name == "signum":
+        return MomentumVotingOptimizer(
+            params, lr=kw["lr"], momentum=kw["momentum"], clip=kw["clip"]
+        )
+    if name == "threshold_if":
+        return ThresholdedIntegrateFireOptimizer(
+            params, lr=kw["lr"], threshold=kw["threshold"], decay=kw["decay"]
+        )
+    if name == "ema_flip":
+        return EMAFlipOptimizer(params, **kw)
+    if name == "cosine_voting":
+        return CosineVotingOptimizer(params, **kw)
+    if name == "sparse_sign":
+        return SparseSignOptimizer(params, **kw)
+    if name == "hybrid_accumulator":
+        return HybridAccumulatorOptimizer(params, **kw)
+    if name == "hybrid_v2":
+        return HybridV2Optimizer(params, **kw)
     raise ValueError(f"Unknown optimizer: {name}")
 
 
@@ -208,43 +285,23 @@ def _make_optimizer(
     name: str,
     model: nn.Module,
     kwargs: dict[str, Any],
-) -> torch.optim.Optimizer:
-    binary, continuous = split_binary_and_bn_params(model)
-    # Most binary optimizers already special-case dim<2; still pass all params.
-    # For adam, use full model; for others, single group is fine.
-    params = model.parameters()
+):
+    """
+    Adam: full-model Adam.
+    Others: binary weights via specialized opt + Adam on BN/bias (proposal).
+    """
     if name == "adam":
-        return torch.optim.Adam(params, lr=kwargs.get("lr", 1e-3))
-    if name == "ste":
-        return STEOptimizer(params, lr=kwargs["lr"], momentum=kwargs["momentum"])
-    if name == "voting":
-        return VotingOptimizer(
-            params,
-            lr=kwargs["lr"],
-            momentum=kwargs["momentum"],
-            push_rate=kwargs["push_rate"],
-            clip=kwargs["clip"],
-        )
-    if name == "signum":
-        return MomentumVotingOptimizer(
-            params, lr=kwargs["lr"], momentum=kwargs["momentum"], clip=kwargs["clip"]
-        )
-    if name == "threshold_if":
-        return ThresholdedIntegrateFireOptimizer(
-            params,
-            lr=kwargs["lr"],
-            threshold=kwargs["threshold"],
-            decay=kwargs["decay"],
-        )
-    if name == "ema_flip":
-        return EMAFlipOptimizer(params, **kwargs)
-    if name == "cosine_voting":
-        return CosineVotingOptimizer(params, **kwargs)
-    if name == "sparse_sign":
-        return SparseSignOptimizer(params, **kwargs)
-    if name == "hybrid_accumulator":
-        return HybridAccumulatorOptimizer(params, **kwargs)
-    raise ValueError(f"Unknown optimizer: {name}")
+        return torch.optim.Adam(model.parameters(), lr=kwargs.get("lr", 1e-3))
+
+    binary, continuous = split_binary_and_bn_params(model)
+    if not binary:
+        binary = list(model.parameters())
+        continuous = []
+
+    bin_opt = _make_binary_optimizer(name, binary, kwargs)
+    bn_lr = float(kwargs.get("bn_adam_lr") or BN_ADAM_LR)
+    bn_opt = torch.optim.Adam(continuous, lr=bn_lr) if continuous else None
+    return DualOptimizer(bin_opt, bn_opt)
 
 
 def make_train_spec(

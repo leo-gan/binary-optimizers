@@ -19,7 +19,7 @@ import torch.nn as nn
 
 
 # Bump when optimizer step logic or architecture factories change incompatibly.
-CHECKPOINT_SCHEMA_VERSION = 2
+CHECKPOINT_SCHEMA_VERSION = 3
 
 DEFAULT_CHECKPOINT_ROOT = Path("checkpoints")
 

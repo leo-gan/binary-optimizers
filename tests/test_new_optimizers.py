@@ -192,3 +192,36 @@ def test_new_optimizer_comparison_builder():
     cmp_ = build_new_optimizer_comparison(fake, model="bit_mlp_small")
     assert cmp_["wins"]["ema_flip"]["n_wins"] == 5
     assert cmp_["sequential"][0]["n_acc_wins"] >= 1
+
+
+def test_hybrid_v2_step_and_export():
+    from binary_optimizers.optimizers.hybrid_v2 import HybridV2Optimizer
+
+    model = create_mnist_bit_mlp(hidden_dim=16)
+    opt = HybridV2Optimizer(model.parameters(), lr_max=0.1, total_steps=50, density=0.8)
+    x = torch.randn(8, 1, 28, 28)
+    y = torch.randint(0, 10, (8,))
+    opt.zero_grad()
+    nn.functional.cross_entropy(model(x), y).backward()
+    opt.step()
+    for p in model.parameters():
+        assert torch.isfinite(p.data).all()
+
+
+def test_dual_optimizer_steps_bn():
+    from binary_optimizers.training.dual_optimizer import DualOptimizer
+    from binary_optimizers.training.param_groups import split_binary_and_bn_params
+    from binary_optimizers.optimizers.ema_flip import EMAFlipOptimizer
+
+    model = create_mnist_bit_mlp(hidden_dim=16)
+    binary, continuous = split_binary_and_bn_params(model)
+    assert continuous  # BatchNorm params
+    dual = DualOptimizer(
+        EMAFlipOptimizer(binary, lr=0.05, total_steps=10),
+        torch.optim.Adam(continuous, lr=1e-3),
+    )
+    x = torch.randn(4, 1, 28, 28)
+    y = torch.randint(0, 10, (4,))
+    dual.zero_grad()
+    nn.functional.cross_entropy(model(x), y).backward()
+    dual.step()

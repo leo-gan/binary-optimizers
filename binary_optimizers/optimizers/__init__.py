@@ -11,3 +11,4 @@ from .cosine_voting import CosineVotingOptimizer
 from .ema_flip import EMAFlipOptimizer
 from .hybrid_accumulator import HybridAccumulatorOptimizer
 from .sparse_sign import SparseSignOptimizer
+from .hybrid_v2 import HybridV2Optimizer
