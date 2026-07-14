@@ -7,3 +7,7 @@ from .integrate_fire import IntegrateFireOptimizer, AdaptiveIntegrateFireOptimiz
 from .threshold_if import ThresholdedIntegrateFireOptimizer
 from .logic_optimizer import IntegerVotingOptimizer
 from .swarm_log_optimizer import SwarmLogOptimizer
+from .cosine_voting import CosineVotingOptimizer
+from .ema_flip import EMAFlipOptimizer
+from .hybrid_accumulator import HybridAccumulatorOptimizer
+from .sparse_sign import SparseSignOptimizer
