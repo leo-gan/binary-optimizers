@@ -20,3 +20,7 @@ cifar-10-python.tar.gz
 data/
 results/*.json
 
+
+# trained model cache (local; retrain only on model/opt change)
+checkpoints/
+*.pt

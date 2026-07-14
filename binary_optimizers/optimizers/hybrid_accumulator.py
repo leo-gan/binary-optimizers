@@ -1,19 +1,5 @@
 """
-HybridAccumulatorOptimizer: EMA gradient tracking + adaptive threshold integrate-and-fire.
-
-Combines the best ideas from:
-  - MomentumVotingOptimizer (momentum-smoothed gradient signal)
-  - ThresholdedIntegrateFireOptimizer (accumulate-then-fire to ±1)
-  - AdaptiveIntegrateFireOptimizer (auto-tuning threshold)
-
-Improvement rationale:
-  - MomentumVoting applies updates every step, causing noisy oscillations
-    in the binary regime. HybridAccumulator only fires when the
-    accumulated evidence for a flip is strong enough.
-  - ThresholdIF uses a fixed threshold. HybridAccumulator adapts the
-    threshold per group to maintain a target fire rate.
-  - On fire, weights are *set* to sign(accumulator) (not added), matching
-    the proven ThresholdIF discrete update.
+HybridAccumulatorOptimizer: per-parameter adaptive IF with optional soft fire.
 """
 
 from __future__ import annotations
@@ -25,43 +11,31 @@ import torch
 
 class HybridAccumulatorOptimizer(torch.optim.Optimizer):
     """
-    Maintains:
-      1. An EMA of the gradient (directional signal).
-      2. An accumulator that integrates the anti-gradient pressure.
-      3. When |accumulator| exceeds threshold, the weight is set to
-         sign(accumulator) and the accumulator resets.
-      4. The threshold adapts per group to maintain a target fire rate.
+    EMA gradient + accumulate-then-fire with **per-tensor** adaptive thresholds.
 
     Parameters
     ----------
-    params : iterable
-        Model parameters.
-    lr : float
-        Scale for accumulation (integrate step). Default 0.1.
-    momentum : float
-        EMA coefficient for gradient smoothing. Default 0.9.
-    init_threshold : float
-        Initial fire threshold. Default 0.05.
-    target_fire_rate : float
-        Desired fraction of weights fired per step. Default 0.05.
-    decay : float
-        Accumulator decay each step (like ThresholdIF). Default 0.95.
-    clip : float
-        Weight clamp range. Default 1.5.
-    bn_lr : float | None
-        Learning rate for 1-D params. Defaults to ``lr``.
+    soft_fire : bool
+        If True, blend toward sign(acc) instead of hard assign.
+    soft_alpha : float
+        Blend factor when soft_fire is True.
+    min_fire_rate : float
+        Floor for actual fire rate used when adapting threshold.
     """
 
     def __init__(
         self,
         params,
-        lr: float = 0.1,
+        lr: float = 0.15,
         momentum: float = 0.9,
-        init_threshold: float = 0.05,
-        target_fire_rate: float = 0.05,
+        init_threshold: float = 0.03,
+        target_fire_rate: float = 0.08,
         decay: float = 0.95,
         clip: float = 1.5,
         bn_lr: Optional[float] = None,
+        soft_fire: bool = True,
+        soft_alpha: float = 0.5,
+        min_fire_rate: float = 1e-3,
     ):
         if bn_lr is None:
             bn_lr = lr
@@ -72,11 +46,14 @@ class HybridAccumulatorOptimizer(torch.optim.Optimizer):
         defaults = dict(
             lr=lr,
             momentum=momentum,
-            threshold=init_threshold,
+            init_threshold=init_threshold,
             target_fire_rate=target_fire_rate,
             decay=decay,
             clip=clip,
             bn_lr=bn_lr,
+            soft_fire=soft_fire,
+            soft_alpha=soft_alpha,
+            min_fire_rate=min_fire_rate,
         )
         super().__init__(params, defaults)
 
@@ -90,14 +67,14 @@ class HybridAccumulatorOptimizer(torch.optim.Optimizer):
         for group in self.param_groups:
             lr = group["lr"]
             momentum = group["momentum"]
-            threshold = group["threshold"]
             target = group["target_fire_rate"]
             decay = group["decay"]
             clip = group["clip"]
             bn_lr = group["bn_lr"]
-
-            group_fires = 0
-            group_params = 0
+            soft_fire = group["soft_fire"]
+            soft_alpha = group["soft_alpha"]
+            min_fr = group["min_fire_rate"]
+            init_thr = group["init_threshold"]
 
             for p in group["params"]:
                 if p.grad is None:
@@ -111,38 +88,39 @@ class HybridAccumulatorOptimizer(torch.optim.Optimizer):
                 if "ema_grad" not in state:
                     state["ema_grad"] = torch.zeros_like(p.data)
                     state["accumulator"] = torch.zeros_like(p.data)
+                    state["threshold"] = float(init_thr)
 
-                # Step 1: EMA of gradient
+                threshold = float(state["threshold"])
                 ema = state["ema_grad"]
                 ema.mul_(momentum).add_(p.grad.data, alpha=1.0 - momentum)
 
-                # Step 2: Integrate anti-gradient pressure with decay (ThresholdIF style)
                 acc = state["accumulator"]
                 acc.mul_(decay).add_(ema, alpha=-lr)
 
-                # Step 3: Fire → set weight to consensus sign, reset accumulator
                 fire_mask = acc.abs() > threshold
                 n_fired = int(fire_mask.sum().item())
+                n_params = p.numel()
                 if n_fired > 0:
-                    p.data[fire_mask] = torch.sign(acc[fire_mask])
-                    # Avoid zeros from sign(0)
-                    p.data[fire_mask] = torch.where(
-                        p.data[fire_mask] == 0,
-                        torch.ones_like(p.data[fire_mask]),
-                        p.data[fire_mask],
+                    target_sign = torch.sign(acc[fire_mask])
+                    target_sign = torch.where(
+                        target_sign == 0,
+                        torch.ones_like(target_sign),
+                        target_sign,
                     )
+                    if soft_fire:
+                        a = soft_alpha
+                        p.data[fire_mask] = (1 - a) * p.data[fire_mask] + a * target_sign
+                    else:
+                        p.data[fire_mask] = target_sign
                     acc[fire_mask] = 0.0
-                    group_fires += n_fired
 
-                group_params += p.numel()
-                p.data.clamp_(-clip, clip)
-
-            # Step 4: Adapt threshold to maintain target fire rate
-            if group_params > 0:
-                actual_rate = group_fires / group_params
+                # Per-tensor threshold adaptation
+                actual_rate = max(n_fired / max(n_params, 1), min_fr * 0.1)
                 if actual_rate < target * 0.5:
-                    group["threshold"] = max(1e-4, group["threshold"] * 0.9)
+                    state["threshold"] = max(1e-4, threshold * 0.9)
                 elif actual_rate > target * 2.0:
-                    group["threshold"] = min(10.0, group["threshold"] * 1.1)
+                    state["threshold"] = min(10.0, threshold * 1.1)
+
+                p.data.clamp_(-clip, clip)
 
         return loss

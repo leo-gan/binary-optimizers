@@ -53,6 +53,7 @@ class CosineVotingOptimizer(torch.optim.Optimizer):
         clip: float = 1.5,
         confidence_threshold: float = 0.0,
         bn_lr: Optional[float] = None,
+        restart_period: int = 0,
     ):
         if lr_max < lr_min:
             raise ValueError(f"lr_max ({lr_max}) must be >= lr_min ({lr_min})")
@@ -68,6 +69,7 @@ class CosineVotingOptimizer(torch.optim.Optimizer):
             clip=clip,
             confidence_threshold=confidence_threshold,
             bn_lr=bn_lr,
+            restart_period=max(0, int(restart_period)),
         )
         super().__init__(params, defaults)
         # Instance attribute: optimizer.state maps Parameter → dict only.
@@ -78,6 +80,17 @@ class CosineVotingOptimizer(torch.optim.Optimizer):
         T = group["total_steps"]
         lr_max = group["lr_max"]
         lr_min = group["lr_min"]
+        period = group.get("restart_period") or 0
+        # SGDR-style restarts within total_steps when period > 0
+        if period > 0:
+            cycle = t // period
+            t_in = t % period
+            # decay max lr each restart
+            lr_max_c = lr_max * (0.7 ** cycle)
+            lr_max_c = max(lr_max_c, lr_min)
+            return float(
+                lr_min + 0.5 * (lr_max_c - lr_min) * (1.0 + math.cos(math.pi * t_in / period))
+            )
         if t >= T:
             return float(lr_min)
         return float(lr_min + 0.5 * (lr_max - lr_min) * (1.0 + math.cos(math.pi * t / T)))

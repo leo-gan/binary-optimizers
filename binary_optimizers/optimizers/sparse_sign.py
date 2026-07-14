@@ -1,53 +1,81 @@
 """
-SparseSignOptimizer: Sign-based updates on a random sparse subset each step.
+SparseSignOptimizer: Sign-based updates on a (possibly annealed) sparse subset.
 
-Improvement rationale:
-  - STE_SGD and MomentumVoting update *all* parameters every step.
-    For binary networks the gradient sign is the only useful signal,
-    so updating a random subset each step has almost the same
-    convergence curve but at a fraction of the compute.
-  - Memory: only one buffer (momentum), same as MomentumVoting.
-  - Speed: the sparse mask means only `density` fraction of parameters
-    are read/written each step, giving a near-linear speedup.
-  - Convergence: the stochastic subset selection acts as implicit
-    regularization, similar to dropout applied in weight-space.
+Improvements over fixed-density sparse updates:
+  - density can anneal from density_start → density_end over total_steps
+  - optional magnitude-biased sampling (∝ |momentum|) instead of uniform
 """
+
+from __future__ import annotations
+
+from typing import Optional
 
 import torch
 
 
 class SparseSignOptimizer(torch.optim.Optimizer):
     """
-    Each step, select a random `density` fraction of weights.
-    Apply sign(momentum_buffer) updates only to the selected subset.
+    Each step, select a ``density`` fraction of weights and apply sign(momentum).
 
     Parameters
     ----------
-    params : iterable
-        Model parameters.
-    lr : float
-        Step size for the sign update.
-    momentum : float
-        Momentum coefficient for gradient smoothing.
     density : float
-        Fraction of weights updated each step (0, 1]. Default 0.3.
-    clip : float
-        Weight clamp range.
-    bn_lr : float
-        Learning rate for 1-D params (batch norm, bias).
+        Base density when annealing is disabled (density_end is None).
+    density_start, density_end : float | None
+        If both set, density anneals linearly start→end over total_steps.
+    total_steps : int
+        Annealing horizon (also used by effective_lr compensation).
+    magnitude_biased : bool
+        If True, sample proportional to |momentum_buffer| (soft top-k).
     """
 
-    def __init__(self, params, lr: float = 0.005, momentum: float = 0.9,
-                 density: float = 0.5, clip: float = 1.5,
-                 confidence_threshold: float = 0.001,
-                 bn_lr: float = None):
-        if not 0 < density <= 1:
-            raise ValueError(f"density must be in (0, 1], got {density}")
+    def __init__(
+        self,
+        params,
+        lr: float = 0.05,
+        momentum: float = 0.9,
+        density: float = 0.6,
+        density_start: Optional[float] = None,
+        density_end: Optional[float] = None,
+        total_steps: int = 1000,
+        clip: float = 1.5,
+        confidence_threshold: float = 0.001,
+        bn_lr: Optional[float] = None,
+        magnitude_biased: bool = False,
+    ):
+        if density_start is None:
+            density_start = density
+        if density_end is None:
+            density_end = density
+        for d, name in ((density_start, "density_start"), (density_end, "density_end")):
+            if not 0 < d <= 1:
+                raise ValueError(f"{name} must be in (0, 1], got {d}")
         if bn_lr is None:
             bn_lr = lr
-        defaults = dict(lr=lr, momentum=momentum, density=density, clip=clip,
-                        confidence_threshold=confidence_threshold, bn_lr=bn_lr)
+        defaults = dict(
+            lr=lr,
+            momentum=momentum,
+            density=density,
+            density_start=density_start,
+            density_end=density_end,
+            total_steps=max(1, total_steps),
+            clip=clip,
+            confidence_threshold=confidence_threshold,
+            bn_lr=bn_lr,
+            magnitude_biased=magnitude_biased,
+        )
         super().__init__(params, defaults)
+        self.global_step = 0
+
+    def _current_density(self, group) -> float:
+        t = self.global_step
+        T = group["total_steps"]
+        d0 = group["density_start"]
+        d1 = group["density_end"]
+        if t >= T:
+            return float(d1)
+        alpha = t / T
+        return float(d0 + alpha * (d1 - d0))
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -59,10 +87,11 @@ class SparseSignOptimizer(torch.optim.Optimizer):
         for group in self.param_groups:
             lr = group["lr"]
             momentum = group["momentum"]
-            density = group["density"]
+            density = self._current_density(group)
             clip = group["clip"]
             conf_thresh = group["confidence_threshold"]
             bn_lr = group["bn_lr"]
+            mag_bias = group["magnitude_biased"]
 
             for p in group["params"]:
                 if p.grad is None:
@@ -79,18 +108,23 @@ class SparseSignOptimizer(torch.optim.Optimizer):
                 buf = state["momentum_buffer"]
                 buf.mul_(momentum).add_(p.grad.data, alpha=1.0 - momentum)
 
-                # Confidence filter: only act where momentum magnitude is significant
                 confident = buf.abs() > conf_thresh
 
-                # Sparse mask: randomly select `density` fraction of the confident set
-                sparse_mask = torch.rand_like(p.data) < density
-                active = confident & sparse_mask
+                if mag_bias:
+                    # Sample without replacement-ish: keep top fraction by |buf|
+                    # approximated by Bernoulli with p ∝ |buf| scaled to mean density
+                    w = buf.abs()
+                    mean_w = w.mean().clamp(min=1e-12)
+                    probs = (w / mean_w * density).clamp(0, 1)
+                    sparse_mask = torch.rand_like(p.data) < probs
+                else:
+                    sparse_mask = torch.rand_like(p.data) < density
 
-                # Sign update only on active positions — effective lr is
-                # scaled up by 1/density to compensate for sparsity
-                effective_lr = lr / density
+                active = confident & sparse_mask
+                effective_lr = lr / max(density, 1e-3)
                 vote = torch.sign(buf)
                 p.data[active] -= effective_lr * vote[active]
                 p.data.clamp_(-clip, clip)
 
+        self.global_step += 1
         return loss

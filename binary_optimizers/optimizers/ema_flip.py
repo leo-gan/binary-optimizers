@@ -1,17 +1,10 @@
 """
-EMAFlipOptimizer: EMA-smoothed gradient with adaptive confidence gating.
-
-Improvement rationale over existing optimizers:
-  - MomentumRankOptimizer uses expensive torch.topk every step.
-    EMAFlip replaces topk with a threshold comparison (O(n)).
-  - EMA smooths the directional signal; an adaptive threshold on |EMA|
-    self-regulates how many weights update each step.
-  - Optional flip_mode: when wrongness (grad * weight) is high, flip ±1
-    weights instead of a continuous step (binary-native update).
+EMAFlipOptimizer: EMA-smoothed gradient with adaptive confidence gating + optional LR anneal.
 """
 
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 import torch
@@ -19,53 +12,59 @@ import torch
 
 class EMAFlipOptimizer(torch.optim.Optimizer):
     """
-    Maintains an EMA of the gradient. Updates weights where the smoothed
-    signal exceeds an adaptive threshold (running mean of |EMA| * scale).
+    EMA of gradient; update weights where |EMA| exceeds adaptive threshold.
 
     Parameters
     ----------
-    params : iterable
-        Model parameters.
-    lr : float
-        Sign-update step size for continuous mode. Default 0.05.
-    momentum : float
-        EMA decay factor. Default 0.9.
     threshold_scale : float
-        Multiplier on running mean |grad EMA| for the confidence gate.
-        Lower = more aggressive updates. Default 0.5.
-    clip : float
-        Weight clamp range. Default 1.5.
-    bn_lr : float | None
-        Learning rate for 1-D params. Defaults to ``lr``.
+        Multiplier on running mean |grad EMA|. Lower = more aggressive (try 0.25–0.5).
+    lr_min : float | None
+        If set with total_steps, cosine-anneal lr from lr → lr_min.
     flip_mode : bool
-        If True, confident weights with positive wrongness (grad * w) are
-        flipped; remaining confident weights get a continuous sign step.
-        If False (default), all confident weights get a continuous sign step.
+        If True, confident positive-wrongness weights flip; else continuous sign step.
     """
 
     def __init__(
         self,
         params,
         lr: float = 0.05,
+        lr_min: Optional[float] = None,
         momentum: float = 0.9,
-        threshold_scale: float = 0.5,
+        threshold_scale: float = 0.35,
         clip: float = 1.5,
         bn_lr: Optional[float] = None,
         flip_mode: bool = False,
+        total_steps: int = 1000,
     ):
         if bn_lr is None:
             bn_lr = lr
         if threshold_scale <= 0:
             raise ValueError(f"threshold_scale must be > 0, got {threshold_scale}")
+        if lr_min is None:
+            lr_min = lr
         defaults = dict(
             lr=lr,
+            lr_min=lr_min,
             momentum=momentum,
             threshold_scale=threshold_scale,
             clip=clip,
             bn_lr=bn_lr,
             flip_mode=flip_mode,
+            total_steps=max(1, total_steps),
         )
         super().__init__(params, defaults)
+        self.global_step = 0
+
+    def _lr(self, group) -> float:
+        lr0 = group["lr"]
+        lr1 = group["lr_min"]
+        if lr1 >= lr0:
+            return float(lr0)
+        t = self.global_step
+        T = group["total_steps"]
+        if t >= T:
+            return float(lr1)
+        return float(lr1 + 0.5 * (lr0 - lr1) * (1.0 + math.cos(math.pi * t / T)))
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -75,7 +74,7 @@ class EMAFlipOptimizer(torch.optim.Optimizer):
                 loss = closure()
 
         for group in self.param_groups:
-            lr = group["lr"]
+            lr = self._lr(group)
             momentum = group["momentum"]
             threshold_scale = group["threshold_scale"]
             clip = group["clip"]
@@ -113,7 +112,6 @@ class EMAFlipOptimizer(torch.optim.Optimizer):
                     continue
 
                 if flip_mode:
-                    # Flip when weight is aligned with gradient (positive wrongness)
                     wrongness = grad * p.data
                     flip = confident & (wrongness > threshold)
                     cont = confident & ~flip
@@ -124,8 +122,11 @@ class EMAFlipOptimizer(torch.optim.Optimizer):
                         p.data[cont] -= lr * torch.sign(ema[cont])
                 else:
                     vote = torch.sign(ema)
-                    p.data.add_(torch.where(confident, vote, torch.zeros_like(vote)), alpha=-lr)
+                    p.data.add_(
+                        torch.where(confident, vote, torch.zeros_like(vote)), alpha=-lr
+                    )
 
                 p.data.clamp_(-clip, clip)
 
+        self.global_step += 1
         return loss
