@@ -1,23 +1,24 @@
 """
-HybridAccumulatorOptimizer: EMA gradient tracking + adaptive threshold voting.
+HybridAccumulatorOptimizer: EMA gradient tracking + adaptive threshold integrate-and-fire.
 
 Combines the best ideas from:
-  - MomentumVotingOptimizer (momentum-smoothed sign voting)
-  - ThresholdedIntegrateFireOptimizer (accumulate-then-fire)
+  - MomentumVotingOptimizer (momentum-smoothed gradient signal)
+  - ThresholdedIntegrateFireOptimizer (accumulate-then-fire to ±1)
   - AdaptiveIntegrateFireOptimizer (auto-tuning threshold)
 
 Improvement rationale:
   - MomentumVoting applies updates every step, causing noisy oscillations
-    in the binary regime.  HybridAccumulator only fires when the
+    in the binary regime. HybridAccumulator only fires when the
     accumulated evidence for a flip is strong enough.
-  - ThresholdIF uses a fixed threshold.  HybridAccumulator adapts the
-    threshold per-layer to maintain a target flip rate, which keeps
-    convergence stable across layers with different gradient scales.
-  - The combination yields better accuracy than either approach alone,
-    with memory comparable to MomentumVoting (one EMA buffer + one
-    accumulator per param, but the accumulator is reset on fire so
-    peak usage stays bounded).
+  - ThresholdIF uses a fixed threshold. HybridAccumulator adapts the
+    threshold per group to maintain a target fire rate.
+  - On fire, weights are *set* to sign(accumulator) (not added), matching
+    the proven ThresholdIF discrete update.
 """
+
+from __future__ import annotations
+
+from typing import Optional
 
 import torch
 
@@ -25,37 +26,58 @@ import torch
 class HybridAccumulatorOptimizer(torch.optim.Optimizer):
     """
     Maintains:
-      1. An EMA of the gradient sign (the "direction signal").
-      2. An accumulator that integrates the direction signal.
-      3. When the accumulator crosses the threshold, the weight is flipped
-         toward the consensus direction and the accumulator resets.
-      4. The threshold adapts per-layer to maintain a target flip rate.
+      1. An EMA of the gradient (directional signal).
+      2. An accumulator that integrates the anti-gradient pressure.
+      3. When |accumulator| exceeds threshold, the weight is set to
+         sign(accumulator) and the accumulator resets.
+      4. The threshold adapts per group to maintain a target fire rate.
 
     Parameters
     ----------
     params : iterable
         Model parameters.
     lr : float
-        Scale for accumulation. Default 0.05.
+        Scale for accumulation (integrate step). Default 0.1.
     momentum : float
-        EMA coefficient for gradient sign smoothing. Default 0.9.
+        EMA coefficient for gradient smoothing. Default 0.9.
     init_threshold : float
-        Initial fire threshold. Default 0.5.
-    target_flip_rate : float
-        Desired fraction of weights flipped per step. Default 0.01.
+        Initial fire threshold. Default 0.05.
+    target_fire_rate : float
+        Desired fraction of weights fired per step. Default 0.05.
+    decay : float
+        Accumulator decay each step (like ThresholdIF). Default 0.95.
     clip : float
         Weight clamp range. Default 1.5.
-    bn_lr : float
-        Learning rate for 1-D params. Default 0.01.
+    bn_lr : float | None
+        Learning rate for 1-D params. Defaults to ``lr``.
     """
 
-    def __init__(self, params, lr: float = 0.005, momentum: float = 0.9,
-                 init_threshold: float = 0.05, target_fire_rate: float = 0.3,
-                 clip: float = 1.5, bn_lr: float = None):
+    def __init__(
+        self,
+        params,
+        lr: float = 0.1,
+        momentum: float = 0.9,
+        init_threshold: float = 0.05,
+        target_fire_rate: float = 0.05,
+        decay: float = 0.95,
+        clip: float = 1.5,
+        bn_lr: Optional[float] = None,
+    ):
         if bn_lr is None:
             bn_lr = lr
-        defaults = dict(lr=lr, momentum=momentum, threshold=init_threshold,
-                        target_fire_rate=target_fire_rate, clip=clip, bn_lr=bn_lr)
+        if not 0.0 < target_fire_rate <= 1.0:
+            raise ValueError(f"target_fire_rate must be in (0, 1], got {target_fire_rate}")
+        if init_threshold <= 0:
+            raise ValueError(f"init_threshold must be > 0, got {init_threshold}")
+        defaults = dict(
+            lr=lr,
+            momentum=momentum,
+            threshold=init_threshold,
+            target_fire_rate=target_fire_rate,
+            decay=decay,
+            clip=clip,
+            bn_lr=bn_lr,
+        )
         super().__init__(params, defaults)
 
     @torch.no_grad()
@@ -70,6 +92,7 @@ class HybridAccumulatorOptimizer(torch.optim.Optimizer):
             momentum = group["momentum"]
             threshold = group["threshold"]
             target = group["target_fire_rate"]
+            decay = group["decay"]
             clip = group["clip"]
             bn_lr = group["bn_lr"]
 
@@ -89,20 +112,25 @@ class HybridAccumulatorOptimizer(torch.optim.Optimizer):
                     state["ema_grad"] = torch.zeros_like(p.data)
                     state["accumulator"] = torch.zeros_like(p.data)
 
-                # Step 1: EMA of gradient (full gradient, not just sign)
+                # Step 1: EMA of gradient
                 ema = state["ema_grad"]
                 ema.mul_(momentum).add_(p.grad.data, alpha=1.0 - momentum)
 
-                # Step 2: Accumulate the smoothed gradient signal
+                # Step 2: Integrate anti-gradient pressure with decay (ThresholdIF style)
                 acc = state["accumulator"]
-                acc.add_(ema, alpha=-lr)  # anti-gradient direction
+                acc.mul_(decay).add_(ema, alpha=-lr)
 
-                # Step 3: Fire when |accumulator| exceeds threshold
+                # Step 3: Fire → set weight to consensus sign, reset accumulator
                 fire_mask = acc.abs() > threshold
-                n_fired = fire_mask.sum().item()
+                n_fired = int(fire_mask.sum().item())
                 if n_fired > 0:
-                    # Apply accumulated signal directly (not just lr-scaled)
-                    p.data[fire_mask] += acc[fire_mask]
+                    p.data[fire_mask] = torch.sign(acc[fire_mask])
+                    # Avoid zeros from sign(0)
+                    p.data[fire_mask] = torch.where(
+                        p.data[fire_mask] == 0,
+                        torch.ones_like(p.data[fire_mask]),
+                        p.data[fire_mask],
+                    )
                     acc[fire_mask] = 0.0
                     group_fires += n_fired
 
@@ -113,8 +141,8 @@ class HybridAccumulatorOptimizer(torch.optim.Optimizer):
             if group_params > 0:
                 actual_rate = group_fires / group_params
                 if actual_rate < target * 0.5:
-                    group["threshold"] = max(0.001, group["threshold"] * 0.95)
+                    group["threshold"] = max(1e-4, group["threshold"] * 0.9)
                 elif actual_rate > target * 2.0:
-                    group["threshold"] *= 1.05
+                    group["threshold"] = min(10.0, group["threshold"] * 1.1)
 
         return loss

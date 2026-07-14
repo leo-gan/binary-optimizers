@@ -1,46 +1,70 @@
 """
-EMAFlipOptimizer: Exponential Moving Average + threshold-gated bit flipping.
+EMAFlipOptimizer: EMA-smoothed gradient with adaptive confidence gating.
 
 Improvement rationale over existing optimizers:
   - MomentumRankOptimizer uses expensive torch.topk every step.
-    EMAFlip replaces topk with a simple threshold comparison, making it
-    O(n) instead of O(n log k).
-  - The EMA provides temporal smoothing like MomentumRank, reducing
-    noisy gradient-driven oscillations.
-  - Adaptive threshold tracks the running mean of wrongness so the flip
-    rate self-regulates without hyperparameter tuning.
-  - Lower memory than Adam (one buffer vs two), competitive with
-    momentum-based optimizers.
+    EMAFlip replaces topk with a threshold comparison (O(n)).
+  - EMA smooths the directional signal; an adaptive threshold on |EMA|
+    self-regulates how many weights update each step.
+  - Optional flip_mode: when wrongness (grad * weight) is high, flip ±1
+    weights instead of a continuous step (binary-native update).
 """
+
+from __future__ import annotations
+
+from typing import Optional
 
 import torch
 
 
 class EMAFlipOptimizer(torch.optim.Optimizer):
     """
-    Maintains an EMA of per-weight "wrongness" (grad * weight).
-    Flips weights whose smoothed wrongness exceeds an adaptive threshold.
+    Maintains an EMA of the gradient. Updates weights where the smoothed
+    signal exceeds an adaptive threshold (running mean of |EMA| * scale).
 
     Parameters
     ----------
     params : iterable
         Model parameters.
+    lr : float
+        Sign-update step size for continuous mode. Default 0.05.
     momentum : float
-        EMA decay factor (higher = more smoothing). Default 0.95.
+        EMA decay factor. Default 0.9.
     threshold_scale : float
-        Multiplier on the running mean wrongness to set the flip threshold.
-        Lower values = more aggressive flipping. Default 1.5.
-    bn_lr : float
-        Learning rate for batch-norm / 1-D parameters. Default 0.01.
+        Multiplier on running mean |grad EMA| for the confidence gate.
+        Lower = more aggressive updates. Default 0.5.
+    clip : float
+        Weight clamp range. Default 1.5.
+    bn_lr : float | None
+        Learning rate for 1-D params. Defaults to ``lr``.
+    flip_mode : bool
+        If True, confident weights with positive wrongness (grad * w) are
+        flipped; remaining confident weights get a continuous sign step.
+        If False (default), all confident weights get a continuous sign step.
     """
 
-    def __init__(self, params, lr: float = 0.005, momentum: float = 0.9,
-                 threshold_scale: float = 1.0, clip: float = 1.5,
-                 bn_lr: float = None):
+    def __init__(
+        self,
+        params,
+        lr: float = 0.05,
+        momentum: float = 0.9,
+        threshold_scale: float = 0.5,
+        clip: float = 1.5,
+        bn_lr: Optional[float] = None,
+        flip_mode: bool = False,
+    ):
         if bn_lr is None:
             bn_lr = lr
-        defaults = dict(lr=lr, momentum=momentum, threshold_scale=threshold_scale,
-                        clip=clip, bn_lr=bn_lr)
+        if threshold_scale <= 0:
+            raise ValueError(f"threshold_scale must be > 0, got {threshold_scale}")
+        defaults = dict(
+            lr=lr,
+            momentum=momentum,
+            threshold_scale=threshold_scale,
+            clip=clip,
+            bn_lr=bn_lr,
+            flip_mode=flip_mode,
+        )
         super().__init__(params, defaults)
 
     @torch.no_grad()
@@ -56,12 +80,12 @@ class EMAFlipOptimizer(torch.optim.Optimizer):
             threshold_scale = group["threshold_scale"]
             clip = group["clip"]
             bn_lr = group["bn_lr"]
+            flip_mode = group["flip_mode"]
 
             for p in group["params"]:
                 if p.grad is None:
                     continue
 
-                # 1-D params (batch-norm, bias): plain SGD
                 if p.data.dim() < 2:
                     p.data.add_(p.grad.data, alpha=-bn_lr)
                     continue
@@ -70,25 +94,37 @@ class EMAFlipOptimizer(torch.optim.Optimizer):
                 state = self.state[p]
                 if "grad_ema" not in state:
                     state["grad_ema"] = torch.zeros_like(p.data)
-                    state["running_mean"] = torch.tensor(0.0, device=p.device)
+                    state["running_mean"] = torch.zeros(
+                        (), device=p.device, dtype=p.dtype
+                    )
 
-                # EMA of gradient (directional signal)
                 ema = state["grad_ema"]
                 ema.mul_(momentum).add_(grad, alpha=1.0 - momentum)
 
-                # Adaptive threshold: only update weights with strong signal
                 ema_abs = ema.abs()
                 mean_abs = ema_abs.mean()
                 rm = state["running_mean"]
                 rm.mul_(0.95).add_(mean_abs, alpha=0.05)
-                threshold = rm * threshold_scale
+                threshold = torch.clamp(rm * threshold_scale, min=1e-8)
 
-                # Sign-based update, gated by confidence
                 confident = ema_abs > threshold
-                vote = torch.sign(ema)
-                # Apply sign update only where signal is confident
-                update = torch.where(confident, vote, torch.zeros_like(vote))
-                p.data.add_(update, alpha=-lr)
+                if not confident.any():
+                    p.data.clamp_(-clip, clip)
+                    continue
+
+                if flip_mode:
+                    # Flip when weight is aligned with gradient (positive wrongness)
+                    wrongness = grad * p.data
+                    flip = confident & (wrongness > threshold)
+                    cont = confident & ~flip
+                    if flip.any():
+                        p.data[flip] *= -1
+                        ema[flip] = 0.0
+                    if cont.any():
+                        p.data[cont] -= lr * torch.sign(ema[cont])
+                else:
+                    vote = torch.sign(ema)
+                    p.data.add_(torch.where(confident, vote, torch.zeros_like(vote)), alpha=-lr)
 
                 p.data.clamp_(-clip, clip)
 

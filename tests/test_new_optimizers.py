@@ -24,9 +24,9 @@ from binary_optimizers.benchmarks.training_sweep import (
     "opt_cls,kwargs",
     [
         (EMAFlipOptimizer, dict(lr=0.01, momentum=0.9, threshold_scale=0.5)),
-        (CosineVotingOptimizer, dict(lr_max=0.01, lr_min=0.001, total_steps=50)),
-        (SparseSignOptimizer, dict(lr=0.01, density=0.5)),
-        (HybridAccumulatorOptimizer, dict(lr=0.01, init_threshold=0.01)),
+        (CosineVotingOptimizer, dict(lr_max=0.1, lr_min=0.01, total_steps=50)),
+        (SparseSignOptimizer, dict(lr=0.05, density=0.5)),
+        (HybridAccumulatorOptimizer, dict(lr=0.1, init_threshold=0.05)),
     ],
 )
 def test_optimizer_step_runs_and_clamps(opt_cls, kwargs):
@@ -42,6 +42,75 @@ def test_optimizer_step_runs_and_clamps(opt_cls, kwargs):
     for p in model.parameters():
         if p.data.dim() >= 2:
             assert p.data.abs().max() <= 1.5 + 1e-5
+        assert torch.isfinite(p.data).all()
+
+
+def test_hybrid_fires_and_sets_signs():
+    """Hybrid must set weights to ±1 on fire, not leave them near-init."""
+    torch.manual_seed(0)
+    model = create_mnist_bit_mlp(hidden_dim=16)
+    opt = HybridAccumulatorOptimizer(
+        model.parameters(), lr=0.5, init_threshold=0.001, target_fire_rate=0.2, decay=0.5
+    )
+    before = {
+        n: p.detach().clone()
+        for n, p in model.named_parameters()
+        if p.dim() >= 2
+    }
+    for _ in range(20):
+        x = torch.randn(16, 1, 28, 28)
+        y = torch.randint(0, 10, (16,))
+        opt.zero_grad()
+        nn.functional.cross_entropy(model(x), y).backward()
+        opt.step()
+    changed = False
+    for n, p in model.named_parameters():
+        if p.dim() < 2:
+            continue
+        if not torch.allclose(p.data, before[n], atol=1e-5):
+            changed = True
+        # Fired weights should be on the clamp/sign extremes often
+        assert torch.isfinite(p.data).all()
+    assert changed, "HybridAccumulator did not update any 2D weights"
+
+
+def test_ema_flip_can_flip_weights():
+    torch.manual_seed(1)
+    w = nn.Parameter(torch.ones(4, 4))
+    opt = EMAFlipOptimizer(
+        [w], lr=0.01, momentum=0.0, threshold_scale=0.1, flip_mode=True
+    )
+    # Grad same sign as weight → positive wrongness → flip toward -1
+    w.grad = torch.ones_like(w)
+    opt.step()
+    assert (w.data < 0).any(), "EMAFlip flip_mode should flip on positive wrongness"
+
+
+def test_ema_flip_continuous_moves_against_grad():
+    w = nn.Parameter(torch.zeros(4, 4))
+    opt = EMAFlipOptimizer(
+        [w], lr=0.1, momentum=0.0, threshold_scale=0.1, flip_mode=False
+    )
+    w.grad = torch.ones_like(w)
+    opt.step()
+    # sign update subtracts sign(grad) → weights become negative
+    assert (w.data < 0).all()
+
+
+
+def test_cosine_state_safe_for_profiler():
+    from binary_optimizers.profiling.memory import measure_training_memory
+
+    model = create_mnist_bit_mlp(hidden_dim=8)
+    opt = CosineVotingOptimizer(model.parameters(), lr_max=0.1, lr_min=0.01, total_steps=10)
+    x = torch.randn(4, 1, 28, 28)
+    y = torch.randint(0, 10, (4,))
+    opt.zero_grad()
+    nn.functional.cross_entropy(model(x), y).backward()
+    opt.step()
+    # Must not raise (old bug: state['global_step'] was an int)
+    mem = measure_training_memory(model, opt)
+    assert mem.total_bytes > 0
 
 
 @pytest.mark.parametrize(

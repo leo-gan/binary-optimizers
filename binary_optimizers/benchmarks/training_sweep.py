@@ -123,29 +123,36 @@ def _make_optimizer(name: str, model: nn.Module) -> torch.optim.Optimizer:
     # New optimizers (sequential improvements over voting / IF / sign baselines)
     if name == "ema_flip":
         return EMAFlipOptimizer(
-            params, lr=0.008, momentum=0.9, threshold_scale=0.5, clip=1.5
+            params,
+            lr=0.05,
+            momentum=0.9,
+            threshold_scale=0.5,
+            clip=1.5,
+            flip_mode=False,
         )
     if name == "cosine_voting":
+        # lr scale matches MomentumVoting / Voting family for fair comparison
         return CosineVotingOptimizer(
             params,
-            lr_max=0.01,
-            lr_min=0.002,
+            lr_max=0.1,
+            lr_min=0.01,
             momentum=0.9,
             total_steps=400,
             clip=1.5,
-            confidence_threshold=0.0005,
+            confidence_threshold=0.0,
         )
     if name == "sparse_sign":
         return SparseSignOptimizer(
-            params, lr=0.006, momentum=0.9, density=0.6, clip=1.5
+            params, lr=0.05, momentum=0.9, density=0.6, clip=1.5
         )
     if name == "hybrid_accumulator":
         return HybridAccumulatorOptimizer(
             params,
-            lr=0.005,
+            lr=0.1,
             momentum=0.9,
-            init_threshold=0.003,
-            target_fire_rate=0.5,
+            init_threshold=0.05,
+            target_fire_rate=0.05,
+            decay=0.95,
             clip=1.5,
         )
     raise ValueError(f"Unknown optimizer: {name}")
