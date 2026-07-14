@@ -15,3 +15,13 @@ The docs are organized to capture:
 
 - `optimizers.md`
 - `networks.md`
+- `END_TO_END_SUMMARY.md` — inference engine, memory profiler, training sweep, Pareto analysis
+
+## Generated analysis artifacts
+
+See `results/` (produced by `experiments/run_full_pipeline.py`):
+
+- `inference_benchmark.md` / `.json`
+- `training_sweep.json`
+- `pareto_analysis.md` / `.json`
+- `SUMMARY.md`

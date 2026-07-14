@@ -15,3 +15,8 @@ dist/
 .ruff_cache/
 
 cifar-10-python.tar.gz
+
+# datasets
+data/
+results/*.json
+

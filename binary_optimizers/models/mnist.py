@@ -14,6 +14,20 @@ def create_mnist_bit_mlp(hidden_dim: int = 128) -> nn.Module:
     )
 
 
+def create_mnist_bit_mlp_large(hidden_dim: int = 512) -> nn.Module:
+    """Larger 2-hidden-layer binary MLP for capacity comparisons."""
+    return nn.Sequential(
+        nn.Flatten(),
+        BitLinearSTE(28 * 28, hidden_dim),
+        nn.BatchNorm1d(hidden_dim),
+        nn.ReLU(),
+        BitLinearSTE(hidden_dim, hidden_dim),
+        nn.BatchNorm1d(hidden_dim),
+        nn.ReLU(),
+        BitLinearSTE(hidden_dim, 10),
+    )
+
+
 def create_mnist_swarm_mlp(hidden_dim: int = 128, swarm_size: int = 32) -> nn.Module:
     return nn.Sequential(
         nn.Flatten(),
