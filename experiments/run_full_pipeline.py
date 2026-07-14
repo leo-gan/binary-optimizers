@@ -27,15 +27,15 @@ This work adds:
    inference footprint in float / int8 / bitpacked form with compression ratios.
 3. **Inference benchmarks** — float vs sign-weight float vs packed binary across
    batch sizes, plus swarm full-population vs majority-vote cache.
-4. **Training sweep (scaffold)** — baseline and **four new** optimizers × models
-   with multi-trial stats, epoch curves, wall time, and memory.
+4. **Training sweep (scaffold)** — optimizer × model combinations with multi-trial
+   stats, epoch curves, wall time, and memory.
 5. **Pareto analysis** — accuracy vs inference memory/speed and training efficiency.
-6. **New optimizer proofs** — sequential design rationale and accuracy win matrix
-   (see `results/new_optimizers_report.md` and `docs/NEW_OPTIMIZERS.md`).
 
 > **Scaffolding note:** epochs, batches, and benchmark iterations are intentionally
 > small so the analytics pipeline is end-to-end without full training cost.
 > Numbers show *relative structure*, not final published accuracy.
+> For fit-scale ranking and the **default Bit-MLP optimizer (`ema_flip`)**, see
+> `docs/optimizers.md` and `docs/FIT_TRAINING_ANALYSIS.md`.
 
 ## Trade-offs
 
@@ -43,10 +43,8 @@ This work adds:
 | :--- | :--- | :--- | :--- |
 | Adam + STE layers | High (moments) | Bitpacked | Strong baseline; float optimizer state |
 | STE SGD | Medium | Bitpacked | Clamps weights to [-1,1] |
-| Voting / Signum | Medium–high (accumulators / momentum) | Bitpacked | Discrete flip dynamics |
-| Threshold IF | Medium (accumulators) | Bitpacked | Event-driven flips |
-| EMAFlip / CosineVoting / SparseSign | Medium (EMA or momentum) | Bitpacked | New optimizers |
-| HybridAccumulator | Medium–high (EMA + accumulator) | Bitpacked | Adaptive fire rate |
+| Voting / Signum / CosineVoting / EMAFlip | Medium (one buffer) | Bitpacked | Sign / vote dynamics; **ema_flip recommended for Bit-MLP** |
+| Threshold IF / hybrids | Medium–high | Bitpacked | Event-driven; often lower FC accuracy |
 | Swarm | High (population × S) | Bitpacked via majority | Training stores S bits/weight |
 
 **Key trade-off:** swarm training multiplies parameter memory by population size,
@@ -60,17 +58,17 @@ but inference can cache the majority vote and match STE bitpacked size.
 
 ### Training sweep (see `results/training_sweep.json`)
 
-Configs: baselines (adam/ste/voting/signum/threshold_if/swarm) **and** new
-optimizers (`ema_flip`, `cosine_voting`, `sparse_sign`, `hybrid_accumulator`)
-on small/large MNIST Bit-MLP, plus CIFAR Adam/Signum/STE.
+Configs: adam/ste/voting/signum/threshold_if/swarm and binary specialists
+(`ema_flip`, `cosine_voting`, `sparse_sign`, `hybrid_accumulator`, …)
+on MNIST Bit-MLP and CIFAR variants.
 
 ### Pareto (see `results/pareto_analysis.md`)
 
 {pareto_excerpt}
 
-### New optimizers (see `docs/NEW_OPTIMIZERS.md`)
+### Optimizer guide
 
-{new_opt_excerpt}
+See **`docs/optimizers.md`** for mechanisms, reasons, trade-offs, and the Bit-MLP default.
 
 ## How to reproduce
 
@@ -80,10 +78,8 @@ uv run pytest tests/ -q
 
 # Scaffolding pipeline
 uv run python experiments/run_full_pipeline.py
-# or stepwise:
-uv run python experiments/run_inference_benchmark.py
-uv run python experiments/run_training_sweep.py
-uv run python experiments/run_pareto_analysis.py
+# Fit-scale (cached checkpoints):
+uv run python experiments/run_fit_training.py
 ```
 
 ## File map
@@ -92,15 +88,12 @@ uv run python experiments/run_pareto_analysis.py
 | :--- | :--- |
 | `binary_optimizers/inference/` | Pack/unpack, XNOR+popcount linear, weight extract |
 | `binary_optimizers/profiling/` | Training + inference memory profiler |
-| `binary_optimizers/optimizers/ema_flip.py` etc. | Four new optimizers |
+| `binary_optimizers/optimizers/` | All optimizers (see docs/optimizers.md) |
 | `binary_optimizers/benchmarks/training_sweep.py` | Multi-config training harness |
 | `binary_optimizers/benchmarks/inference_bench.py` | Inference mode benchmarks |
 | `binary_optimizers/benchmarks/pareto.py` | Combined Pareto analysis |
-| `binary_optimizers/benchmarks/new_optimizer_report.py` | Win matrix / sequential proofs |
-| `tests/test_new_optimizers.py` | New optimizer unit tests |
-| `tests/test_packing.py` | Packing round-trip tests |
-| `tests/test_binary_linear.py` | Binary forward ≡ F.linear(sign x, sign w) |
-| `tests/test_memory_profiler.py` | Profiler tests |
+| `docs/optimizers.md` | Unified optimizer design + trade-offs |
+| `tests/` | Packing, inference, optimizers, checkpoints |
 | `results/` | JSON + markdown artifacts |
 '''
 
@@ -108,12 +101,10 @@ uv run python experiments/run_pareto_analysis.py
 def write_summary(
     pareto_md: Path,
     inference_md: Path,
-    new_opt_md: Path,
     out: Path,
 ) -> None:
     inf_text = inference_md.read_text() if inference_md.exists() else "_pending_"
     par_text = pareto_md.read_text() if pareto_md.exists() else "_pending_"
-    new_text = new_opt_md.read_text() if new_opt_md.exists() else "_pending_"
 
     # Pull key tables (skip titles)
     def excerpt(text: str, max_lines: int = 40) -> str:
@@ -126,7 +117,6 @@ def write_summary(
     body = SUMMARY_TEMPLATE.format(
         inference_excerpt=excerpt(inf_text, 35),
         pareto_excerpt=excerpt(par_text, 55),
-        new_opt_excerpt=excerpt(new_text, 60),
     )
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(body)
@@ -162,23 +152,18 @@ def main() -> None:
         output_json="results/pareto_analysis.json",
     )
 
-    print("\n=== 4/4 New optimizer improvement report ===")
+    print("\n=== 4/4 Scaffold comparison report (results only) ===")
     write_new_optimizer_report(
         training_json="results/training_sweep.json",
         output_md="results/new_optimizers_report.md",
         output_json="results/new_optimizers_report.json",
         model="bit_mlp_small",
     )
-    # Promote to docs/
-    Path("docs/NEW_OPTIMIZERS.md").write_text(
-        Path("results/new_optimizers_report.md").read_text()
-    )
-    print("Wrote docs/NEW_OPTIMIZERS.md")
+    # Optimizer design docs live in docs/optimizers.md (unified); not overwritten here.
 
     write_summary(
         Path("results/pareto_analysis.md"),
         Path("results/inference_benchmark.md"),
-        Path("results/new_optimizers_report.md"),
         Path("docs/END_TO_END_SUMMARY.md"),
     )
     # also copy key report

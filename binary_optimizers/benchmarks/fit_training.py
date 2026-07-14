@@ -45,26 +45,37 @@ from binary_optimizers.training.loops import (
 from binary_optimizers.training.param_groups import split_binary_and_bn_params
 
 
+# Default recommendation for Bit-MLP: ema_flip (see docs/optimizers.md).
+# Full suite order: recommended default first, then strong baselines, then research variants.
 FIT_OPTIMIZERS = (
+    "ema_flip",  # default binary trainer for Bit-MLP
     "adam",
-    "ste",
-    "voting",
     "signum",
-    "threshold_if",
-    "ema_flip",
     "cosine_voting",
+    "ste",
     "sparse_sign",
-    "hybrid_accumulator",
+    "threshold_if",
+    "voting",
     "hybrid_v2",
+    "hybrid_accumulator",
 )
 
-NEW_OPTIMIZERS = (
+# Highlighted in reports as binary-specialist suite (not "legacy vs new").
+BINARY_SPECIALISTS = (
     "ema_flip",
     "cosine_voting",
     "sparse_sign",
     "hybrid_accumulator",
     "hybrid_v2",
+    "signum",
+    "threshold_if",
+    "voting",
+    "ste",
 )
+
+# Back-compat alias used by report ranking flags
+NEW_OPTIMIZERS = BINARY_SPECIALISTS
+
 
 # Tag/schema: bump when training protocol or optimizer defaults change.
 FIT_TAG = "fit_v3"
@@ -133,7 +144,9 @@ class FitConfigResult:
             "per_epoch_test_acc_mean": curve,
             "per_epoch_train_acc_mean": train_curve,
             "memory": mem,
-            "is_new": self.optimizer in NEW_OPTIMIZERS,
+            "is_specialist": self.optimizer in BINARY_SPECIALISTS,
+            # back-compat for older report consumers
+            "is_new": self.optimizer in BINARY_SPECIALISTS,
             "from_cache": all(t.from_cache for t in self.trials) if self.trials else False,
             "checkpoint_slugs": [t.checkpoint_slug for t in self.trials],
         }
@@ -647,27 +660,6 @@ def analyze_fit_results(payload: dict[str, Any]) -> dict[str, Any]:
     summaries_sorted = sorted(
         summaries, key=lambda s: s.get("best_test_acc_mean", 0.0), reverse=True
     )
-    baselines = [s for s in summaries if not s.get("is_new")]
-    news = [s for s in summaries if s.get("is_new")]
-    base_by = {s["optimizer"]: s for s in baselines}
-    new_by = {s["optimizer"]: s for s in news}
-
-    win_matrix: dict[str, dict[str, Any]] = {}
-    for n_name, n_s in new_by.items():
-        beats = {
-            b_name: n_s["best_test_acc_mean"] > b_s["best_test_acc_mean"]
-            for b_name, b_s in base_by.items()
-        }
-        win_matrix[n_name] = {
-            "beats": beats,
-            "n_wins": sum(1 for v in beats.values() if v),
-            "n_baselines": len(beats),
-            "best_test": n_s["best_test_acc_mean"],
-            "final_test": n_s["final_test_acc_mean"],
-            "gap": n_s["train_test_gap_mean"],
-            "time_s": n_s["total_time_mean_s"],
-            "packed": n_s.get("packed_test_acc_mean"),
-        }
 
     diagnostics = []
     for s in summaries_sorted:
@@ -687,7 +679,6 @@ def analyze_fit_results(payload: dict[str, Any]) -> dict[str, Any]:
         diagnostics.append(
             {
                 "optimizer": s["optimizer"],
-                "is_new": s.get("is_new", False),
                 "best_test": s["best_test_acc_mean"],
                 "final_test": s["final_test_acc_mean"],
                 "final_train": train_c[-1] if train_c else 0.0,
@@ -701,10 +692,19 @@ def analyze_fit_results(payload: dict[str, Any]) -> dict[str, Any]:
             }
         )
 
-    best_base = max(baselines, key=lambda s: s["best_test_acc_mean"]) if baselines else None
-    best_new = max(news, key=lambda s: s["best_test_acc_mean"]) if news else None
+    best_overall = summaries_sorted[0]["optimizer"] if summaries_sorted else None
 
     proposals = [
+        {
+            "optimizer": "docs",
+            "title": "Default Bit-MLP trainer is ema_flip",
+            "detail": (
+                "See docs/optimizers.md for reasons and trade-offs. "
+                "Use --default-only or --optimizers ema_flip for focused runs; "
+                "checkpoints under checkpoints/ (local only)."
+            ),
+            "priority": "high",
+        },
         {
             "optimizer": "cache",
             "title": "Checkpoint cache is source of truth",
@@ -714,23 +714,8 @@ def analyze_fit_results(payload: dict[str, Any]) -> dict[str, Any]:
                 "Use experiments/run_benchmark_checkpoints.py to re-evaluate only."
             ),
             "priority": "high",
-        }
+        },
     ]
-    if best_new and best_base:
-        if best_new["best_test_acc_mean"] + 1e-9 < best_base["best_test_acc_mean"]:
-            proposals.append(
-                {
-                    "optimizer": "all_new",
-                    "title": "Close gap to best baseline",
-                    "detail": (
-                        f"Best new `{best_new['optimizer']}` "
-                        f"({best_new['best_test_acc_mean']:.4f}) vs baseline "
-                        f"`{best_base['optimizer']}` "
-                        f"({best_base['best_test_acc_mean']:.4f}). Continue Hybrid v2 ablations."
-                    ),
-                    "priority": "high",
-                }
-            )
 
     return {
         "ranking": [
@@ -747,10 +732,11 @@ def analyze_fit_results(payload: dict[str, Any]) -> dict[str, Any]:
             }
             for i, s in enumerate(summaries_sorted)
         ],
-        "win_matrix": win_matrix,
         "diagnostics": diagnostics,
-        "best_baseline": best_base["optimizer"] if best_base else None,
-        "best_new": best_new["optimizer"] if best_new else None,
+        "best_overall": best_overall,
+        "best_baseline": best_overall,  # back-compat
+        "best_new": best_overall,
+        "win_matrix": {},
         "proposals": proposals,
     }
 
@@ -780,42 +766,29 @@ def render_fit_report(payload: dict[str, Any], analysis: dict[str, Any]) -> str:
         "",
         "## Ranking",
         "",
-        "| Rank | Opt | New | Best | Final | Packed | Gap | Time | Cache |",
-        "| :---: | :--- | :---: | ---: | ---: | ---: | ---: | ---: | :---: |",
+        "| Rank | Opt | Best | Final | Packed | Gap | Time | Cache |",
+        "| :---: | :--- | ---: | ---: | ---: | ---: | ---: | :---: |",
     ]
     for r in analysis["ranking"]:
         pk = r.get("packed_test_acc_mean")
         pk_s = f"{pk:.4f}" if pk is not None else "—"
+        mark = " **(default)**" if r["optimizer"] == "ema_flip" else ""
         lines.append(
-            f"| {r['rank']} | `{r['optimizer']}` | {'★' if r['is_new'] else ''} | "
+            f"| {r['rank']} | `{r['optimizer']}`{mark} | "
             f"{r['best_test_acc_mean']:.4f} | {r['final_test_acc_mean']:.4f} | {pk_s} | "
             f"{r['train_test_gap_mean']:+.4f} | {r['total_time_mean_s']:.1f} | "
             f"{'yes' if r.get('from_cache') else 'no'} |"
         )
     lines += [
         "",
-        f"**Best baseline:** `{analysis.get('best_baseline')}`  ",
-        f"**Best new:** `{analysis.get('best_new')}`",
+        f"**Best overall:** `{analysis.get('best_overall')}`  ",
+        f"**Recommended default (Bit-MLP):** `ema_flip` — see `docs/optimizers.md`.",
         "",
-        "## Win matrix (best test)",
+        "## Diagnostics",
         "",
+        "| Opt | Best | Final | Packed | Issues | Cache |",
+        "| :--- | ---: | ---: | ---: | :--- | :---: |",
     ]
-    base_names = [s["optimizer"] for s in payload.get("summaries") or [] if not s.get("is_new")]
-    if base_names:
-        lines.append("| New | " + " | ".join(f"`{b}`" for b in base_names) + " | Wins |")
-        lines.append("| :--- | " + " | ".join([":---:"] * len(base_names)) + " | :---: |")
-        for n in NEW_OPTIMIZERS:
-            w = analysis["win_matrix"].get(n)
-            if not w:
-                continue
-            marks = ["✅" if w["beats"].get(b) else "❌" for b in base_names]
-            lines.append(
-                f"| `{n}` | " + " | ".join(marks) + f" | **{w['n_wins']}/{w['n_baselines']}** |"
-            )
-
-    lines += ["", "## Diagnostics", ""]
-    lines.append("| Opt | Best | Final | Packed | Issues | Cache |")
-    lines.append("| :--- | ---: | ---: | ---: | :--- | :---: |")
     for d in analysis["diagnostics"]:
         pk = d.get("packed")
         pk_s = f"{pk:.4f}" if pk is not None else "—"

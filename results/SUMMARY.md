@@ -20,7 +20,7 @@ This work adds:
    with multi-trial stats, epoch curves, wall time, and memory.
 5. **Pareto analysis** — accuracy vs inference memory/speed and training efficiency.
 6. **New optimizer proofs** — sequential design rationale and accuracy win matrix
-   (see `results/new_optimizers_report.md` and `docs/NEW_OPTIMIZERS.md`).
+   (see `results/new_optimizers_report.md` and `docs/optimizers.md`).
 
 > **Scaffolding note:** epochs, batches, and benchmark iterations are intentionally
 > small so the analytics pipeline is end-to-end without full training cost.
@@ -143,7 +143,7 @@ Combines scaffolding training-sweep results with inference benchmarks.
 | mnist_large_sparse_sign | 0.1387 | 14.8 KB |
 | mnist_large_hybrid_accumulator | 0.0742 | 14.8 KB |
 
-### New optimizers (see `docs/NEW_OPTIMIZERS.md`)
+### Optimizer guide (see `docs/optimizers.md`)
 
 This document completes the experiment task for four optimizers designed to improve on the existing suite. Numbers come from the **scaffolding** training sweep (short epochs/batches) so they show relative structure, not publishable full-train accuracy.
 
@@ -224,7 +224,7 @@ uv run python experiments/run_pareto_analysis.py
 | :--- | :--- |
 | `binary_optimizers/inference/` | Pack/unpack, XNOR+popcount linear, weight extract |
 | `binary_optimizers/profiling/` | Training + inference memory profiler |
-| `binary_optimizers/optimizers/ema_flip.py` etc. | Four new optimizers |
+| `binary_optimizers/optimizers/ema_flip.py` etc. | Binary optimizers |
 | `binary_optimizers/benchmarks/training_sweep.py` | Multi-config training harness |
 | `binary_optimizers/benchmarks/inference_bench.py` | Inference mode benchmarks |
 | `binary_optimizers/benchmarks/pareto.py` | Combined Pareto analysis |

@@ -1,462 +1,290 @@
-# Optimizers (extracted)
+# Binary Optimizers — Design, Reasons, and Trade-offs
 
-Source: `experiments/Benchmarking Voting Optimizer vs STE on CIFAR-10.md`
+Unified reference for optimizers in `binary_optimizers/optimizers/`.  
+Historical notebook notes and later experimental variants are merged here; there is **no old/new split** — only families, mechanisms, and when to use each.
 
-This document summarizes the optimizer variants defined and discussed in the source note.
+**Related:** fit-scale numbers in [`FIT_TRAINING_ANALYSIS.md`](FIT_TRAINING_ANALYSIS.md), roadmap in [`IMPROVEMENT_PROPOSALS.md`](IMPROVEMENT_PROPOSALS.md).
 
-## Design goals (as stated in the note)
+---
 
-Across the versions in the note, the optimizer designs are motivated by:
+## Recommended default (Bit-MLP / MNIST-style STE nets)
 
-- **Stability for binary weights**: reduce "flip-flapping", oscillations, and sensitivity to noisy per-batch gradients.
-- **Less optimizer state**: reduce memory compared to Adam by using fewer auxiliary buffers.
-- **Sign- and bit-centric updates**: prefer bounded, vote-like signals over unbounded gradient magnitudes.
-- **Toward "logic-only" training**: explore bit-flip rules (stochastic or rank-based) that avoid floating-point-style accumulation in the update rule.
+| Setting | Recommendation |
+| :--- | :--- |
+| **Default optimizer** | **`ema_flip`** (`EMAFlipOptimizer`) |
+| **Strong alternatives** | `signum`, `cosine_voting`, or `adam` (higher train memory) |
+| **BN / bias** | Dual training: binary opt on 2D weights + Adam on 1D (fit pipeline) |
+| **Deploy** | Extract ±1 / bitpacked weights; inference cost is independent of training optimizer |
 
-## STE Optimizer (SGD + clamp)
+### Why `ema_flip`
 
-The note uses a "Classic STE" approach:
+On fit-scale full MNIST (Bit-MLP h=128, 15 epochs, seed 42, dual BN-Adam):
 
-- **Core idea**: keep **latent float weights**, but use `sign()`-quantized weights during forward.
-- **Update rule**: standard SGD update on the latent weights.
-- **Stabilizer**: clamp weights to `[-1, 1]` after each step.
+| Optimizer | Best test | Final test | Packed (±1) | Train mem (approx.) |
+| :--- | ---: | ---: | ---: | ---: |
+| **ema_flip** | **96.26%** | **96.14%** | **96.14%** | ~795 KB |
+| adam | 96.09% | 94.78% | 94.78% | ~1.19 MB |
+| signum | 96.03% | 95.78% | 95.78% | ~795 KB |
+| cosine_voting | 95.77% | 95.77% | 95.77% | ~795 KB |
 
-In the note this appears as `STEOptimizer(torch.optim.SGD)` which performs `super().step(...)` and then applies `p.data.clamp_(-1, 1)`.
+- **Beats Adam on best and final** accuracy in this protocol while using **one** momentum-style buffer instead of Adam’s two moments.
+- **Holds the plateau**: peak ≈ final (almost no late decay). Adam peaks mid-training then drops ~1.3 pp by the last epoch.
+- **Deployment-friendly**: packed (±1) accuracy matches STE forward for this model.
 
-### Why this exists
+### Trade-offs of the default
 
-The note uses STE as a baseline to train binarized (sign) weights while still using standard backprop on float parameters.
+| Dimension | EMAFlip | vs Adam | vs pure Signum |
+| :--- | :--- | :--- | :--- |
+| Accuracy (fit MNIST) | Highest in suite | Slightly better final | Slightly better |
+| Train optimizer memory | One EMA buffer | **Lower** | Similar |
+| Hyperparameters | `lr`, `lr_min`, `momentum`, `threshold_scale`, `total_steps` | More knobs than Adam’s lr | Extra adaptive gate |
+| Early epochs | Can lag (gate warm-up) | Adam often stronger ep 1–5 | Signum often stronger early |
+| Evidence strength | Strong on this protocol | — | Multi-seed confirmation still recommended |
 
-### How it works (intuition)
+**When not to default to EMAFlip:** swarm population layers (use swarm / swarm-log opts); pure event-driven / neuromorphic studies (use integrate-and-fire family); ablations that require vanilla SGD-STE or Adam baselines.
 
-- Forward uses `sign()` quantization (either by mutating weights in early code, or via a non-destructive proxy in later code).
-- Backward propagates gradients to the underlying float parameters.
-- Clamping keeps latent weights bounded so the training dynamics do not explode.
+**CLI / experiments:** fit training lists `ema_flip` first among binary specialists; full suite still includes baselines for comparison.
 
-### Better than its ancestor
+```bash
+uv run python experiments/run_fit_training.py --optimizers ema_flip
+# or full suite (cached after first run)
+uv run python experiments/run_fit_training.py
+```
 
-Compared to destructive "always sign the stored parameters" approaches, STE keeps trainable latent float weights while still producing sign weights for the forward pass.
+---
 
-### Pros
+## Shared design goals
 
-- Simple to implement (uses standard SGD step).
-- Compatible with standard PyTorch training loops.
+Across the suite:
 
-### Cons
+1. **Stability for binary / sign weights** — reduce flip-flapping from noisy per-batch gradients.  
+2. **Less optimizer state than Adam** where possible — fewer auxiliary buffers.  
+3. **Sign- and bit-centric updates** — prefer bounded direction signals over raw gradient magnitudes.  
+4. **Compatible with STE forward** — latent floats (or swarm bits) with sign/binary forward and clamp.  
+5. **Optional path toward discrete / logic-like rules** — fire, rank, or population flips.
 
-- The note characterizes STE as **noisy** for binary weights; gradient spikes can cause unstable flips.
-- Compared to sign/voting approaches, it can require more optimizer state if paired with Adam-like optimizers.
+**Training protocol note:** Fit experiments typically optimize **2D weights** with the binary optimizer and **BatchNorm/bias** with a small Adam (`DualOptimizer`). That is part of the accuracy story for binary methods vs pure Adam-on-all-params.
 
-## Voting Optimizer (reference, non-fused)
+---
 
-A Python reference implementation in the note:
+## Fit-scale comparison (single view)
 
-- **State**: per-parameter accumulator `A`.
-- **Vote**: `batch_consensus = -sign(grad)`.
-- **Accumulate**: `A += lr * batch_consensus`, then `A = clamp(A, -1, 1)`.
-- **Binary weight**: `p.data = sign(A)`.
+Full MNIST, Bit-MLP, 15 epochs (see `FIT_TRAINING_ANALYSIS.md` for curves).
 
-This version writes binary weights directly from the accumulator sign.
+| Tier | Optimizers | Best test | Typical behavior |
+| :--- | :--- | ---: | :--- |
+| **S** | `ema_flip` | ~96.3% | Late surge, holds plateau |
+| **A** | `adam`, `signum`, `cosine_voting` | ~95.8–96.1% | Strong fit |
+| **B** | `ste` | ~94.5% | Stable, lower ceiling |
+| **C** | `sparse_sign`, `threshold_if` | ~88–90% | Incomplete fit |
+| **D** | `voting`, `hybrid_v2`, `hybrid_accumulator` | ~78–86% | Stuck / high variance |
 
-### Why this exists
+**Takeaway:** Continuous **confidence-gated sign** updates (EMAFlip, Signum, CosineVoting) outperform **accumulate-then-fire** hybrids on this model class.
 
-The note introduces Voting to stabilize binary training by accumulating "votes" for the sign before flipping the weight, instead of reacting to each batch instantly.
+---
 
-### How it works (intuition)
+## Family overview
 
-- Each batch produces a discrete vote (`-sign(grad)`).
-- Votes integrate into a bounded accumulator `A`.
-- The weight becomes `sign(A)`, so it only flips when the accumulator crosses zero with enough consistency.
+| Family | Keys / classes | Core idea |
+| :--- | :--- | :--- |
+| STE / float | `ste`, `adam` | Latent floats + clamp or Adam moments |
+| Sign / voting | `voting`, `signum`, `cosine_voting`, `ema_flip`, `sparse_sign` | Directional votes, often with momentum |
+| Integrate-and-fire | `threshold_if`, `integrate_fire*`, `hybrid_accumulator`, `hybrid_v2` | Accumulate pressure, fire discrete updates |
+| Logic / rank | `bitlogic`, rank / adaptive / momentum-rank | Stochastic or top-k bit flips |
+| Integer / log | `logic_optimizer`, `swarm_log_optimizer` | Integer counters / log-style flips |
+| Swarm | `swarm`, swarm-log | Population of bits per weight |
 
-### Better than its ancestor
+---
 
-Relative to per-batch sign updates, the accumulator acts as a memory, reducing rapid back-and-forth flips.
+## STE family
 
-### Pros
+### `STEOptimizer` (`ste`)
 
-- The note expects smoother convergence by avoiding catastrophic oscillations.
-- Bounded accumulator reduces unbounded drift.
+- **Mechanism:** SGD step, then clamp 2D weights to `[-1, 1]`.  
+- **Reason:** Classic straight-through baseline: standard backprop on latent floats, sign in forward (via layers).  
+- **Pros:** Simple, well-understood, works with any STE layer.  
+- **Cons:** No vote memory; can be noisy; lower ceiling than Signum/EMAFlip on fit MNIST (~94.5%).  
+- **Use when:** Baseline comparisons, simplest binary training path.
 
-### Cons
+### Adam (`adam`)
 
-- In this reference form it overwrites weights as pure signs; it is not directly compatible with later "keep float latent weights" STE-style forward binarization.
+- **Mechanism:** Full Adam on all parameters.  
+- **Reason:** Strong float optimizer upper bound for the same architecture.  
+- **Pros:** Fast early progress, high peak accuracy.  
+- **Cons:** ~2× optimizer-state memory; **late decay** on fit MNIST (best 96.1% → final 94.8%).  
+- **Use when:** Accuracy ceiling reference, not memory-constrained training.
 
-## Voting Optimizer (STE-compatible accumulator + push)
+---
 
-In the note’s corrected CIFAR-10 setup ("v2"), Voting is rewritten to keep float storage compatible with STE-style forward binarization:
+## Sign / voting family
 
-- **State**: per-parameter accumulator `A` clamped to `[-1, 1]`.
-- **Vote**: `batch_consensus = -sign(grad)`.
-- **Target sign**: `w_target = sign(A)`.
-- **Push rule**: move the float weight toward `w_target` using `push_rate`:
-  - `p.data += push_rate * (w_target - p.data)`
-- **Bound**: clamp `p.data` to `[-1, 1]`.
+### `VotingOptimizer` (`voting`)
 
-### Why this was implemented
+- **Mechanism:** Accumulate signed batch consensus; push latent weights toward `sign(accumulator)` with `push_rate`.  
+- **Reason:** Stabilize flips by requiring multi-batch consensus instead of reacting to one batch.  
+- **Pros:** Interpretable consensus dynamics; bounded accumulator.  
+- **Cons:** Sensitive to `push_rate`; fit MNIST shows **high test variance** and weaker final accuracy (~86% best / ~83% final with dual BN-Adam).  
+- **Use when:** Studying consensus dynamics; not the accuracy default.
 
-The note’s "v2" explains that earlier binarization logic caused problems. This variant is designed to keep Voting compatible with STE-style, non-destructive forward binarization by retaining float parameters.
+### `MomentumVotingOptimizer` / Signum (`signum`)
 
-### How it works (intuition)
+- **Mechanism:** Momentum buffer on gradients; update `p -= lr * sign(buf)`; clip weights. Optional confidence threshold.  
+- **Reason:** Fix SignSGD drift (clip) and noise (momentum) while keeping **one** buffer.  
+- **Pros:** Strong accuracy (~96% best); memory-efficient; simple.  
+- **Cons:** Fixed lr (no built-in anneal); mild late noise.  
+- **Use when:** Strong default alternative to EMAFlip; simpler hyperparameter surface.
 
-- The accumulator `A` still decides a target sign `w_target = sign(A)`.
-- Instead of overwriting weights with `sign(A)`, the optimizer **pushes** the float weight toward that sign by a fraction (`push_rate`).
+### `CosineVotingOptimizer` (`cosine_voting`)
 
-### Better than its ancestor
+- **Mechanism:** Same as momentum sign updates, with **built-in cosine LR** from `lr_max` → `lr_min` over `total_steps` (optional restarts).  
+- **Reason:** Exploration early, refinement late, without an external scheduler.  
+- **Pros:** Stable late fit on MNIST (~95.8% final = best); good memory; no separate LR schedule code.  
+- **Cons:** Must set `total_steps` ≈ real train length; aggressive restarts can destabilize (prefer `restart_period=0` for long fits).  
+- **Use when:** You want Signum-like dynamics with automatic annealing.
 
-Compared to the reference Voting optimizer, this version:
+### `EMAFlipOptimizer` (`ema_flip`) — **default for Bit-MLP**
 
-- keeps float weights (so STE-style proxies can be used in forward), and
-- avoids hard overwrites that break "latent weight" training.
+- **Mechanism:** EMA of gradient; adaptive threshold = `threshold_scale * running_mean(|EMA|)`; update only confident weights with `-lr * sign(EMA)`; optional cosine `lr → lr_min`; optional true flip mode.  
+- **Reason:** Replace expensive top-k ranking with an O(n) adaptive gate; reduce oscillation vs raw sign; keep Signum-level memory.  
+- **Pros:** Best fit accuracy in suite; holds plateau; lower memory than Adam; packed = STE.  
+- **Cons:** Early warm-up lag; more hyperparameters (`threshold_scale`, anneal horizon); multi-seed validation still wise.  
+- **Use when:** Default training for STE Bit-MLP / similar fully connected binary nets.
 
-### Pros
+### `SparseSignOptimizer` (`sparse_sign`)
 
-- Maintains Voting’s "consensus" behavior while preserving float storage.
-- Compatible with STE-style forward binarization that does not mutate parameters.
+- **Mechanism:** Momentum sign updates on a random (or magnitude-biased) subset; density can anneal `density_start → density_end`.  
+- **Reason:** Weight-space dropout / cheaper steps; hardware-friendly sparse updates in principle.  
+- **Pros:** Same memory as Signum; potential regularization and sparse-hardware story.  
+- **Cons:** On fit MNIST, **under-fits** if sparse too early (train ~87%, best ~90%); CPU masks add overhead without sparse kernels.  
+- **Use when:** Ablations on sparsity; prefer density ≈ 1.0 until the model is nearly fit, then anneal.
 
-### Cons
+---
 
-- Introduces an extra hyperparameter (`push_rate`) that affects how abruptly weights move.
+## Integrate-and-fire family
 
-## Voting Optimizer (simple SignSGD)
+### `ThresholdedIntegrateFireOptimizer` (`threshold_if`)
 
-Later sections introduce a simplified "Voting" optimizer described as "Your Idea / SignSGD":
+- **Mechanism:** Accumulator decays and integrates anti-grad; when `|acc| > threshold`, set weight to `sign(acc)` and reset.  
+- **Reason:** Event-driven flips only after sustained evidence.  
+- **Pros:** Discrete, interpretable fire events; moderate memory (one acc buffer).  
+- **Cons:** Fixed threshold hard to tune across layers; fit MNIST ceilings ~88% — often under-fires vs continuous sign methods.  
+- **Use when:** Neuromorphic / event-driven experiments.
 
-- **Vote**: `vote = sign(grad)`.
-- **Update**: `p.data -= lr * vote`.
-- **Note in the source**: no clipping in this initial version (weights can drift).
+### `IntegrateFireOptimizer` / `AdaptiveIntegrateFireOptimizer`
 
-The note explicitly analyzes two issues with this baseline:
+- **Mechanism:** Integrate-and-fire on (often swarm) tensors; adaptive variant retunes threshold.  
+- **Reason:** Same family with different parameterization and swarm focus.  
+- **Pros / cons:** Same structural trade-offs as threshold IF; prefer for swarm-shaped params when studying fire rates.
 
-- **Drift problem**: large magnitude shadow weights become hard to flip.
-- **No momentum**: per-batch vote noise causes back-and-forth updates.
+### `HybridAccumulatorOptimizer` (`hybrid_accumulator`)
 
-### Why this exists
+- **Mechanism:** EMA of grad + accumulator + **per-tensor** adaptive threshold; soft or hard fire toward `sign(acc)`.  
+- **Reason:** Combine momentum smoothing with IF and self-tuning fire rate.  
+- **Pros:** Rich state; theoretically noise-filtered.  
+- **Cons:** Two buffers (~Adam-level memory); fit MNIST **stuck ~78%** — fire path under-updates vs continuous sign.  
+- **Use when:** Research on adaptive fire rates; not accuracy-first training.
 
-The note frames this as a minimal "Voting"/SignSGD idea: ignore gradient magnitude, only keep direction, and reduce optimizer memory compared to Adam.
+### `HybridV2Optimizer` (`hybrid_v2`)
 
-### How it works (intuition)
+- **Mechanism:** Stack: momentum EMA + cosine LR + optional sparse mask + optional soft IF fire.  
+- **Reason:** Ablation-friendly combination of the strongest ideas.  
+- **Pros:** Configurable (`use_fire`, `density`, …) to isolate components.  
+- **Cons:** Default fire path plateaus ~82% on fit MNIST; continuous sign path (`use_fire=False`) is the promising ablation.  
+- **Use when:** Structured ablations; not the production default until the sign path is validated.
 
-- Every parameter receives a discrete direction vote (`sign(grad)`).
-- The weight is nudged by a fixed step size each batch.
+---
 
-### Better than its ancestor
+## Logic, rank, and integer variants
 
-Relative to Adam/variance-tracking optimizers, it uses less optimizer state (the note highlights memory savings as a key advantage).
+### BitLogic / Rank / Adaptive / MomentumRank (`bitlogic.py`)
 
-### Pros
+- **Mechanism:** Stochastic flip probability from grad pressure; or top-k “wrongness” flips; adaptive / momentum-rank refinements.  
+- **Reason:** Move toward comparator / ranking rules with less continuous accumulation.  
+- **Pros:** Explicit discrete flip control; rank-based determinism options.  
+- **Cons:** Sensitivity / flip_rate tuning; top-k cost; mainly validated in notebook / swarm settings.  
+- **Use when:** Logic-oriented or swarm-bit studies.
 
-- Lower optimizer-state memory than Adam (as emphasized by the note).
-- Bounded per-step update magnitude (step size does not scale with gradient magnitude).
+### `IntegerVotingOptimizer` (`logic_optimizer`)
 
-### Cons
+- **Mechanism:** Integer accumulators, thresholded flips.  
+- **Reason:** Avoid float application of gradients to binary weights.  
+- **Pros:** Integer-friendly story.  
+- **Cons:** Less exercised in the fit_v3 Bit-MLP suite.
 
-- Drift: without bounding, large-magnitude latent weights can become "stuck".
-- Noise: without momentum, votes can alternate batch-to-batch.
+### Swarm / SwarmLog (`swarm`, `swarm_log_optimizer`)
 
-## Momentum Voting Optimizer (Momentum SignSGD / Signum)
+- **Mechanism:** Population of bits per weight; recruit/flip by pressure; log/integer variants.  
+- **Reason:** Gradual discrete change via partial population flips; majority at inference.  
+- **Pros:** Natural multi-bit representation; inference can collapse to majority (STE-sized).  
+- **Cons:** Training memory × population size; needs swarm layers, not plain BitLinearSTE.
 
-The note’s refinement adds a momentum buffer and clipping:
+---
 
-- **State**: `momentum_buffer` per parameter.
-- **Momentum update**: `buf = momentum * buf + (1 - momentum) * grad`.
-- **Vote**: `vote = sign(buf)`.
-- **Update**: `p.data -= lr * vote`.
-- **Bound**: `p.data.clamp_(...)` (the note uses bounds like `[-1.2, 1.2]` or `[-1.5, 1.5]`).
-- **Optional**: weight decay variant appears in the memory-usage sections.
+## Cross-cutting trade-offs
 
-### Why this was implemented
+| Dimension | Prefer | Avoid / caution |
+| :--- | :--- | :--- |
+| **Accuracy (Bit-MLP MNIST fit)** | `ema_flip`, `signum`, `cosine_voting` | `hybrid_*`, sparse-early, unstable `voting` |
+| **Train memory** | Sign/EMA family (~1 buffer) | Adam, hybrid (2 buffers) |
+| **Inference memory** | Same after extract (bitpacked) | — (optimizer-independent) |
+| **Simplicity** | `ste`, `signum` | Adaptive hybrids |
+| **LR schedule free** | `cosine_voting`, `ema_flip` (built-in anneal) | Fixed-lr Signum/STE without external schedule |
+| **Event-driven semantics** | IF family | Continuous sign defaults |
+| **Swarm models** | `swarm` / swarm-log | Plain EMAFlip on 3D population without care |
 
-The note explicitly motivates this as the fix for:
+**Inference:** After training, weights are extracted to ±1 / uint8 packing. Choice of training optimizer affects **accuracy of the final bits**, not the bitpacked size.
 
-- the **drift** problem (by clipping), and
-- the **amnesia/noise** problem (by adding momentum on votes).
+---
 
-### How it works (intuition)
+## Practical recipes
 
-- Momentum accumulates a smoothed vote direction across batches.
-- The actual update uses only the sign of that momentum buffer.
+```text
+Bit-MLP (MNIST / similar STE FC)
+  → ema_flip  (default)
+  → signum or cosine_voting as backups
+  → adam as float upper bound
 
-### Better than its ancestor
+Need built-in LR anneal only
+  → cosine_voting  (set total_steps = epochs * steps_per_epoch)
 
-Compared to simple SignSGD:
+Event-driven / IF research
+  → threshold_if or hybrid_accumulator (expect lower MNIST FC accuracy)
 
-- momentum stabilizes the direction vote, and
-- clipping keeps latent weights responsive so signs can still flip.
+Sparse-update research
+  → sparse_sign with density≈1 until fit, then anneal
 
-### Pros
+Swarm layers
+  → swarm / swarm_log optimizers + majority extract at inference
+```
 
-- Smoother training dynamics than per-batch sign updates.
-- Still uses only one auxiliary buffer (momentum), which the note highlights as a memory advantage vs Adam.
+### Reproduce fit ranking
 
-### Cons
+```bash
+uv run python experiments/run_fit_training.py          # train missing fingerprints only
+uv run python experiments/run_benchmark_checkpoints.py # eval saved nets, no train
+```
 
-- Requires careful tuning of momentum, learning rate, and clip bounds.
+Checkpoints live under local `checkpoints/` (gitignored).
 
-## Swarm Optimizer (population bit-flipping)
+---
 
-Introduced as a "biological" branch ("Swarm Descent") when weights are represented as a population of bits.
+## Module map
 
-- **Applies to**: swarm parameters shaped like `[out, in, swarm_size]`.
-- **Pressure**: `grad_pressure = grad.mean(dim=2)`.
-- **Flip probability**: `probs = clamp(abs(grad_pressure) * recruit_rate, 0, 0.5)`.
-- **Target**: `target = -sign(grad_pressure)`.
-- **Flip rule**: flip bits that differ from target with probability `probs`.
-- **Implementation note**: later fixed to handle non-swarm parameters (e.g. BatchNorm) by applying a standard SGD-style update for those.
+| Module | Main classes |
+| :--- | :--- |
+| `ste.py` | `STEOptimizer` |
+| `voting.py` | `VotingOptimizer` |
+| `signum.py` | `MomentumVotingOptimizer` |
+| `cosine_voting.py` | `CosineVotingOptimizer` |
+| `ema_flip.py` | `EMAFlipOptimizer` |
+| `sparse_sign.py` | `SparseSignOptimizer` |
+| `threshold_if.py` | `ThresholdedIntegrateFireOptimizer` |
+| `integrate_fire.py` | `IntegrateFireOptimizer`, `AdaptiveIntegrateFireOptimizer` |
+| `hybrid_accumulator.py` | `HybridAccumulatorOptimizer` |
+| `hybrid_v2.py` | `HybridV2Optimizer` |
+| `bitlogic.py` | BitLogic / Rank / Adaptive / MomentumRank |
+| `logic_optimizer.py` | `IntegerVotingOptimizer` |
+| `swarm.py` | `SwarmOptimizer` |
+| `swarm_log_optimizer.py` | `SwarmLogOptimizer` |
 
-### Why this exists
-
-In the note, Swarm Descent is introduced as a different evolutionary branch: represent each logical weight as a population of binary agents (e.g. 32 bits) and learn by flipping bits, motivated by an "equal memory / equal information volume" comparison.
-
-### How it works (intuition)
-
-- Compute a per-weight "pressure" by averaging gradients over the swarm dimension.
-- Convert pressure to a flip probability.
-- Flip the subset of bits that disagree with the target direction, stochastically.
-
-### Better than its ancestor
-
-Compared to sign updates on a single float weight, the swarm representation provides an internal population that can change gradually via partial flips.
-
-### Pros
-
-- Directly operates on discrete bit populations.
-- Naturally supports "partial" changes (only some agents flip) instead of all-or-nothing sign flips.
-
-### Cons
-
-- Requires parameter-shape-specific logic (the note shows failure when treating BatchNorm params as if they were swarm tensors).
-- Higher raw parameter tensor size due to the extra swarm dimension.
-
-## BitLogic Optimizer (stochastic comparator / "logic gate")
-
-Used in the note’s "bit-physics" simulation framing:
-
-- **Applies to**: swarm parameters (3D tensors).
-- **Noise**: compare a random tensor against a flip probability.
-- **Flip probability**: `abs(grad_pressure) * sensitivity`.
-- **Flip rule**: flip bits that are not equal to `target_sign = -sign(grad_pressure)` when `noise < flip_probability`.
-- **Non-swarm parameters**: updated with a simple sign-based step for thresholds.
-
-### Why this exists
-
-The note reframes optimization as a "logic gate" / comparator: use randomness versus an error signal to decide flips, aiming to avoid floating-point-style arithmetic in the update rule.
-
-### How it works (intuition)
-
-- Convert gradient pressure into a flip probability.
-- Compare a random "noise" value to that probability.
-- Flip bits when the comparator triggers and the bit disagrees with the desired direction.
-
-### Better than its ancestor
-
-This is a more explicitly "digital" restatement of stochastic flipping: the decision rule is cast as comparator logic instead of arithmetic updates.
-
-### Pros
-
-- Directly aligned with the note’s "stochastic comparator" framing.
-- Simple conceptual rule: compare noise to pressure.
-
-### Cons
-
-- Still requires scaling/sensitivity choices; if gradients are tiny, flips can become vanishingly rare.
-
-## RankBasedBitOptimizer (deterministic top-k flipping)
-
-The note’s deterministic alternative:
-
-- **Wrongness score**: `wrongness_score = grad * p.data`.
-- **Rank and flip**: select top-`k` entries (based on `flip_rate`) and flip those bits.
-- **Non-swarm parameters**: updated with a sign-based step.
-
-The note motivates this as ensuring updates happen even when gradient magnitudes are tiny.
-
-### Why this was implemented
-
-The note introduces rank-based flipping to avoid "dead zones" where stochastic probabilities become effectively zero for small gradients.
-
-### How it works (intuition)
-
-- Compute a wrongness score per bit.
-- Flip the top fraction of most-wrong bits every step.
-
-### Better than its ancestor
-
-Compared to probability-based flipping, it guarantees a minimum amount of adaptation each step.
-
-### Pros
-
-- Guaranteed updates even under small gradients.
-- Deterministic and easier to reason about than stochastic flips.
-
-### Cons
-
-- Can introduce "thermal noise" if flip rate stays high (the note later discusses the need for annealing).
-
-## AdaptiveBitOptimizer (layer-normalized stochastic flips)
-
-A stochastic bit-flip optimizer that normalizes gradients per layer:
-
-- **Pressure**: `grad_pressure = grad.mean(dim=2)`.
-- **Layer scale**: `mean(abs(grad_pressure)) + eps`.
-- **Normalized pressure**: `norm_pressure = grad_pressure / layer_scale`.
-- **Flip probability**: `clamp(abs(norm_pressure) * base_flip_rate, 0, 1)`.
-- **Target**: `target_sign = -sign(grad_pressure)`.
-- **Flip rule**: stochastic flips where bit differs from target and `rand < flip_prob`.
-
-### Why this was implemented
-
-The note identifies issues with:
-
-- extreme discontinuities from an all-or-nothing sign forward pass, and
-- sensitivity becoming effectively zero when gradients are tiny.
-
-This variant normalizes pressure per layer so flip probabilities remain meaningful.
-
-### How it works (intuition)
-
-- Normalize gradient pressure by a per-layer scale.
-- Use the normalized magnitude to drive flip probabilities.
-
-### Better than its ancestor
-
-Compared to fixed sensitivity, this makes deep layers (with tiny gradients) able to flip bits.
-
-### Pros
-
-- Automatically rescales across layers.
-- Reduces the need to hand-tune a global sensitivity.
-
-### Cons
-
-- Still stochastic; training can remain unstable depending on base flip rate and the broader architecture.
-
-## MomentumRankOptimizer (momentum on wrongness + ranking) + annealing
-
-A later refinement adds momentum to the wrongness score and schedules the flip rate:
-
-- **State**: per-bit `wrongness_buffer`.
-- **Current wrongness**: `current_wrongness = grad * p.data`.
-- **Buffer update**: exponential moving average with `momentum`.
-- **Rank and flip**: flip the top-`k` consistently-wrong bits.
-- **Annealing**: the note includes an explicit exponential schedule for `flip_rate` from a high start rate to a lower end rate.
-
-### Why this was implemented
-
-The note frames this as the fix for "thermal noise": flipping too many bits forever prevents convergence.
-
-### How it works (intuition)
-
-- Momentum buffer accumulates "consistent wrongness".
-- Ranking flips only the most consistently-wrong bits.
-- Annealing reduces flip rate over epochs to transition from exploration to refinement.
-
-### Better than its ancestor
-
-Compared to plain rank-based flipping:
-
-- momentum reduces reaction to one-off noisy batches, and
-- annealing reduces destructive late-stage flipping.
-
-### Pros
-
-- Explicit convergence mechanism (cooling schedule).
-- More stable than constant-rate top-k flipping.
-
-### Cons
-
-- More moving parts: momentum, flip-rate schedule, and associated hyperparameters.
-
-## IntegrateFireOptimizer (accumulator threshold)
-
-A "refuse to flip unless consistently wrong" strategy:
-
-- **State**: per-bit accumulator.
-- **Pressure**: `pressure = grad * p.data * 100.0` (as written in the note).
-- **Integrate**: `acc = decay * acc + pressure`.
-- **Fire**: flip when `acc > threshold`, then reset accumulator.
-- **Non-swarm parameters**: updated via clamped SGD.
-
-### Why this was implemented
-
-The note introduces integrate-and-fire to prevent thrashing: bits only flip when wrongness accumulates past a threshold, analogous to a neuron firing after integrating input.
-
-### How it works (intuition)
-
-- Accumulator integrates pressure with leak (decay).
-- When accumulator crosses threshold, the bit flips and the accumulator resets.
-
-### Better than its ancestor
-
-Compared to immediate flipping, it enforces persistence: a single noisy batch is less likely to trigger a flip.
-
-### Pros
-
-- Built-in hysteresis through the accumulator.
-- Natural protection against rapid oscillations.
-
-### Cons
-
-- The note identifies a "whispering gradient" failure mode: if pressure is too small relative to threshold and leak, flips never happen.
-
-## AdaptiveIntegrateFireOptimizer (self-tuning threshold)
-
-Adds threshold adaptation based on observed flip rate:
-
-- **Pressure**: computed as `grad * p.data` and then boosted (the note uses `* 1000.0`).
-- **Integrate/fire**: as above.
-- **Adaptive threshold**: per parameter-group adjustment based on whether flip rate is below/above a target range.
-
-The note also discusses a failure mode where the adaptive threshold can "run away" after a spike.
-
-### Why this was implemented
-
-It aims to remove manual tuning of the firing threshold by adjusting thresholds to maintain a target flip rate.
-
-### How it works (intuition)
-
-- Measure flip rate per parameter group.
-- Lower threshold when flips are too rare; raise threshold when flips are too frequent.
-
-### Better than its ancestor
-
-Compared to fixed-threshold integrate-and-fire, it adapts to different gradient scales automatically.
-
-### Pros
-
-- Auto-tuning behavior (no single fixed threshold for all conditions).
-
-### Cons
-
-- The note shows an instability where a spike can cause extreme threshold growth, effectively freezing learning.
-
-## BoundedVoteOptimizer (bounded accumulator votes)
-
-A later fix to avoid unbounded pressure from gradient magnitudes:
-
-- **Vote**: `vote = sign(grad) * sign(p.data)` (bounded to `{-1, 0, +1}`).
-- **Integrate**: `acc = decay * acc + vote`.
-- **Fire**: flip if `acc > vote_threshold`.
-- **Refractory reset**: accumulator set to `-threshold * 0.5` for fired bits (as written in the note), to reduce immediate re-flipping.
-
-### Why this was implemented
-
-The note’s "final fix" motivation is to prevent runaway dynamics caused by unbounded gradient magnitudes in the accumulator/threshold feedback loop.
-
-### How it works (intuition)
-
-- Replace pressure magnitude with a bounded democratic vote.
-- Use a fixed threshold with a refractory reset to reduce immediate flip-back.
-
-### Better than its ancestor
-
-Compared to magnitude-based pressure (e.g. `grad * weight * 1000`), bounded votes prevent accumulator explosions and make thresholds physically interpretable as "number of net bad votes".
-
-### Pros
-
-- Bounded inputs to the accumulator reduce instability.
-- Refractory reset reduces oscillatory flip-back.
-
-### Cons
-
-- Discards gradient magnitude information entirely; tuning the vote threshold and decay still matters.
-
+Import surface: `binary_optimizers.optimizers`.

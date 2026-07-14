@@ -1,23 +1,16 @@
 # Documentation
 
-This folder contains documentation extracted from:
-
-- `Benchmarking Voting Optimizer vs STE on CIFAR-10.md`
-
-The docs are organized to capture:
-
-- what each optimizer / layer does,
-- why it was introduced in the notebook’s iteration history,
-- how it improves on earlier variants,
-- pros and cons.
-
 ## Contents
 
-- `optimizers.md`
-- `networks.md`
+- **`optimizers.md`** — unified optimizer guide: **default `ema_flip` for Bit-MLP**, design reasons, trade-offs, fit-scale comparison (all families in one place)
+- `networks.md` — layers / architectures
 - `END_TO_END_SUMMARY.md` — inference engine, memory profiler, training sweep, Pareto analysis
-- `NEW_OPTIMIZERS.md` — four new optimizers: rationale, win matrix, sequential proofs
-- `FIT_TRAINING_ANALYSIS.md` — fit-scale MNIST training (full data, 15 epochs) + improvement proposals
+- `FIT_TRAINING_ANALYSIS.md` — fit-scale MNIST numbers and ranking
+- `IMPROVEMENT_PROPOSALS.md` — research roadmap from fit_v3 (tiers, root causes, next steps)
+
+Historical source notes (optional):
+
+- `Benchmarking Voting Optimizer vs STE on CIFAR-10.md`
 
 ## Checkpoints (trained nets)
 
