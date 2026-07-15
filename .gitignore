@@ -15,3 +15,12 @@ dist/
 .ruff_cache/
 
 cifar-10-python.tar.gz
+
+# datasets
+data/
+results/*.json
+
+
+# trained model cache (local; retrain only on model/opt change)
+checkpoints/
+*.pt
