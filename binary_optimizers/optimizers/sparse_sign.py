@@ -22,21 +22,28 @@ class SparseSignOptimizer(torch.optim.Optimizer):
     density : float
         Base density when annealing is disabled (density_end is None).
     density_start, density_end : float | None
-        If both set, density anneals linearly start→end over total_steps.
+        If both set, density anneals from start→end after a hold phase.
+    density_hold_frac : float
+        Fraction of ``total_steps`` to keep ``density_start`` before annealing
+        (default 0.7 — dense until the model can fit, then sparse regularize).
     total_steps : int
-        Annealing horizon (also used by effective_lr compensation).
+        Annealing horizon.
     magnitude_biased : bool
         If True, sample proportional to |momentum_buffer| (soft top-k).
+    lr_min : float | None
+        If set below ``lr``, cosine-anneal step size over total_steps.
     """
 
     def __init__(
         self,
         params,
         lr: float = 0.05,
+        lr_min: Optional[float] = None,
         momentum: float = 0.9,
         density: float = 0.6,
         density_start: Optional[float] = None,
         density_end: Optional[float] = None,
+        density_hold_frac: float = 0.7,
         total_steps: int = 1000,
         clip: float = 1.5,
         confidence_threshold: float = 0.001,
@@ -50,14 +57,22 @@ class SparseSignOptimizer(torch.optim.Optimizer):
         for d, name in ((density_start, "density_start"), (density_end, "density_end")):
             if not 0 < d <= 1:
                 raise ValueError(f"{name} must be in (0, 1], got {d}")
+        if not 0.0 <= density_hold_frac < 1.0:
+            raise ValueError(
+                f"density_hold_frac must be in [0, 1), got {density_hold_frac}"
+            )
         if bn_lr is None:
             bn_lr = lr
+        if lr_min is None:
+            lr_min = lr
         defaults = dict(
             lr=lr,
+            lr_min=lr_min,
             momentum=momentum,
             density=density,
             density_start=density_start,
             density_end=density_end,
+            density_hold_frac=density_hold_frac,
             total_steps=max(1, total_steps),
             clip=clip,
             confidence_threshold=confidence_threshold,
@@ -72,10 +87,27 @@ class SparseSignOptimizer(torch.optim.Optimizer):
         T = group["total_steps"]
         d0 = group["density_start"]
         d1 = group["density_end"]
-        if t >= T:
+        hold = float(group.get("density_hold_frac", 0.0))
+        t_hold = int(hold * T)
+        if t < t_hold:
+            return float(d0)
+        if t >= T or T <= t_hold:
             return float(d1)
-        alpha = t / T
+        alpha = (t - t_hold) / max(1, T - t_hold)
         return float(d0 + alpha * (d1 - d0))
+
+    def _current_lr(self, group) -> float:
+        import math
+
+        lr0 = group["lr"]
+        lr1 = group["lr_min"]
+        if lr1 >= lr0:
+            return float(lr0)
+        t = self.global_step
+        T = group["total_steps"]
+        if t >= T:
+            return float(lr1)
+        return float(lr1 + 0.5 * (lr0 - lr1) * (1.0 + math.cos(math.pi * t / T)))
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -85,7 +117,7 @@ class SparseSignOptimizer(torch.optim.Optimizer):
                 loss = closure()
 
         for group in self.param_groups:
-            lr = group["lr"]
+            lr = self._current_lr(group)
             momentum = group["momentum"]
             density = self._current_density(group)
             clip = group["clip"]

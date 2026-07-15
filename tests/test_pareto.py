@@ -27,14 +27,24 @@ def test_sweep_config_coverage():
         NEW_OPTIMIZER_NAMES,
     )
 
+    from binary_optimizers.benchmarks.training_sweep import (
+        ACTIVE_RESEARCH_OPTIMIZERS,
+        PAUSED_SWEEP_OPTIMIZERS,
+    )
+
     names = {c["name"] for c in DEFAULT_SWEEP_CONFIGS}
-    # small + large STE optimizers
-    for opt in ("adam", "ste", "voting", "signum", "threshold_if"):
+    for opt in ("adam", "ste", "signum"):
         assert f"mnist_small_{opt}" in names
         assert f"mnist_large_{opt}" in names
     for opt in NEW_OPTIMIZER_NAMES:
         assert f"mnist_small_{opt}" in names
         assert f"mnist_large_{opt}" in names
+    for opt in ACTIVE_RESEARCH_OPTIMIZERS:
+        assert f"mnist_small_{opt}" in names
+        assert f"mnist_large_{opt}" in names
+    for opt in PAUSED_SWEEP_OPTIMIZERS:
+        assert f"mnist_small_{opt}" not in names
+        assert f"mnist_large_{opt}" not in names
     assert "mnist_swarm" in names
     assert "cifar_adam" in names
     assert "cifar_signum" in names

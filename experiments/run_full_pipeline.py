@@ -58,9 +58,9 @@ but inference can cache the majority vote and match STE bitpacked size.
 
 ### Training sweep (see `results/training_sweep.json`)
 
-Configs: adam/ste/voting/signum/threshold_if/swarm and binary specialists
-(`ema_flip`, `cosine_voting`, `sparse_sign`, `hybrid_accumulator`, …)
-on MNIST Bit-MLP and CIFAR variants.
+Configs: active suite (`ema_flip`, `adam`, `signum`, `cosine_voting`, `ste`,
+`sparse_sign`, plus swarm/CIFAR baselines). Paused optimizers stay in code;
+see `docs/optimizers.md` (Active vs paused).
 
 ### Pareto (see `results/pareto_analysis.md`)
 

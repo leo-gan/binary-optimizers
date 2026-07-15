@@ -30,6 +30,7 @@ from binary_optimizers.optimizers.signum import MomentumVotingOptimizer
 from binary_optimizers.optimizers.sparse_sign import SparseSignOptimizer
 from binary_optimizers.optimizers.ste import STEOptimizer
 from binary_optimizers.optimizers.swarm import SwarmOptimizer
+from binary_optimizers.optimizers.swarm_log_optimizer import SwarmLogOptimizer
 from binary_optimizers.optimizers.threshold_if import ThresholdedIntegrateFireOptimizer
 from binary_optimizers.optimizers.voting import VotingOptimizer
 from binary_optimizers.profiling.memory import profile_model_memory
@@ -39,12 +40,23 @@ from binary_optimizers.training.loops import (
     train_one_epoch_classification,
 )
 
-# Optimizers introduced to improve on the baseline suite (scaffold experiments).
+# Active binary specialists in scaffold sweeps.
 NEW_OPTIMIZER_NAMES = (
     "ema_flip",
     "cosine_voting",
     "sparse_sign",
+)
+
+# With potential (original ideas) — included in DEFAULT_SWEEP_CONFIGS again.
+ACTIVE_RESEARCH_OPTIMIZERS = (
+    "voting",
+    "threshold_if",
     "hybrid_accumulator",
+)
+
+# Kept in code; excluded from DEFAULT_SWEEP_CONFIGS.
+PAUSED_SWEEP_OPTIMIZERS = (
+    "hybrid_v2",
 )
 
 
@@ -120,6 +132,10 @@ def _make_optimizer(name: str, model: nn.Module) -> torch.optim.Optimizer:
         )
     if name == "swarm":
         return SwarmOptimizer(params, recruit_rate=50.0, bn_lr=0.01)
+    if name == "swarm_log":
+        return SwarmLogOptimizer(params, threshold=10, flip_prob=0.1, dynamic=False)
+    if name == "swarm_log_dynamic":
+        return SwarmLogOptimizer(params, threshold=10, flip_prob=0.1, dynamic=True)
     # New optimizers (sequential improvements over voting / IF / sign baselines)
     if name == "ema_flip":
         return EMAFlipOptimizer(
@@ -172,32 +188,33 @@ def _make_model(name: str) -> nn.Module:
     raise ValueError(f"Unknown model: {name}")
 
 
-# Scaffolding configs: all required combinations, short runs.
+# Scaffolding configs: active accuracy suite + research opts with potential.
 DEFAULT_SWEEP_CONFIGS: list[dict[str, str]] = [
-    # STE-based small MLP × baseline optimizers
+    # Small MLP
     {"name": "mnist_small_adam", "dataset": "mnist", "model": "bit_mlp_small", "optimizer": "adam"},
     {"name": "mnist_small_ste", "dataset": "mnist", "model": "bit_mlp_small", "optimizer": "ste"},
-    {"name": "mnist_small_voting", "dataset": "mnist", "model": "bit_mlp_small", "optimizer": "voting"},
     {"name": "mnist_small_signum", "dataset": "mnist", "model": "bit_mlp_small", "optimizer": "signum"},
-    {"name": "mnist_small_threshold_if", "dataset": "mnist", "model": "bit_mlp_small", "optimizer": "threshold_if"},
-    # New optimizers on small MLP (primary comparison surface)
     {"name": "mnist_small_ema_flip", "dataset": "mnist", "model": "bit_mlp_small", "optimizer": "ema_flip"},
     {"name": "mnist_small_cosine_voting", "dataset": "mnist", "model": "bit_mlp_small", "optimizer": "cosine_voting"},
     {"name": "mnist_small_sparse_sign", "dataset": "mnist", "model": "bit_mlp_small", "optimizer": "sparse_sign"},
+    {"name": "mnist_small_voting", "dataset": "mnist", "model": "bit_mlp_small", "optimizer": "voting"},
+    {"name": "mnist_small_threshold_if", "dataset": "mnist", "model": "bit_mlp_small", "optimizer": "threshold_if"},
     {"name": "mnist_small_hybrid_accumulator", "dataset": "mnist", "model": "bit_mlp_small", "optimizer": "hybrid_accumulator"},
-    # STE-based large MLP × baseline optimizers
+    # Large MLP
     {"name": "mnist_large_adam", "dataset": "mnist", "model": "bit_mlp_large", "optimizer": "adam"},
     {"name": "mnist_large_ste", "dataset": "mnist", "model": "bit_mlp_large", "optimizer": "ste"},
-    {"name": "mnist_large_voting", "dataset": "mnist", "model": "bit_mlp_large", "optimizer": "voting"},
     {"name": "mnist_large_signum", "dataset": "mnist", "model": "bit_mlp_large", "optimizer": "signum"},
-    {"name": "mnist_large_threshold_if", "dataset": "mnist", "model": "bit_mlp_large", "optimizer": "threshold_if"},
-    # New optimizers on large MLP
     {"name": "mnist_large_ema_flip", "dataset": "mnist", "model": "bit_mlp_large", "optimizer": "ema_flip"},
     {"name": "mnist_large_cosine_voting", "dataset": "mnist", "model": "bit_mlp_large", "optimizer": "cosine_voting"},
     {"name": "mnist_large_sparse_sign", "dataset": "mnist", "model": "bit_mlp_large", "optimizer": "sparse_sign"},
+    {"name": "mnist_large_voting", "dataset": "mnist", "model": "bit_mlp_large", "optimizer": "voting"},
+    {"name": "mnist_large_threshold_if", "dataset": "mnist", "model": "bit_mlp_large", "optimizer": "threshold_if"},
     {"name": "mnist_large_hybrid_accumulator", "dataset": "mnist", "model": "bit_mlp_large", "optimizer": "hybrid_accumulator"},
-    # Swarm
+    # Swarm model
     {"name": "mnist_swarm", "dataset": "mnist", "model": "swarm_mlp", "optimizer": "swarm"},
+    {"name": "mnist_swarm_log", "dataset": "mnist", "model": "swarm_mlp", "optimizer": "swarm_log"},
+    {"name": "mnist_swarm_log_dynamic", "dataset": "mnist", "model": "swarm_mlp", "optimizer": "swarm_log_dynamic"},
+    {"name": "mnist_swarm_adam", "dataset": "mnist", "model": "swarm_mlp", "optimizer": "adam"},
     # CIFAR-10 convnets
     {"name": "cifar_adam", "dataset": "cifar10", "model": "small_bitconvnet", "optimizer": "adam"},
     {"name": "cifar_signum", "dataset": "cifar10", "model": "small_bitconvnet", "optimizer": "signum"},

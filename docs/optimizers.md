@@ -7,6 +7,42 @@ Historical notebook notes and later experimental variants are merged here; there
 
 ---
 
+## Active vs paused experiments
+
+Code for **all** optimizers remains importable. Default **fit** / **sweep** run the **active** set.
+
+| Set | Count | Optimizers |
+| :--- | :---: | :--- |
+| **Active Bit-MLP optimizers** | **9** | `ema_flip`, `adam`, `signum`, `cosine_voting`, `ste`, `sparse_sign`, `voting`, `threshold_if`, `hybrid_accumulator` |
+| **Active swarm combinations** | **4** | `swarm_mlp` × (`swarm`, `swarm_log`, `swarm_log_dynamic`, `adam`) |
+| **Paused** | **1** | `hybrid_v2` |
+| **Package only** | several | `integrate_fire*`, bitlogic/rank, `logic_optimizer`, … |
+
+```bash
+# Full comparison (Bit-MLP suite + swarm paths; cache hits when possible)
+uv run python experiments/run_fit_training.py --include-swarm
+# Swarm only
+uv run python experiments/run_fit_training.py --swarm-only
+```
+
+Re-enable a paused name:
+
+```bash
+uv run python experiments/run_fit_training.py --optimizers hybrid_v2 --epochs 15
+```
+
+### Potential among re-enabled research opts
+
+| Optimizer | Why still enabled | Potential |
+| :--- | :--- | :--- |
+| **`hybrid_accumulator`** | Adaptive fire-rate IF (unique control loop) | Event/energy metrics; not top MNIST FC accuracy yet |
+| **`threshold_if`** | Clean IF baseline | Soft-fire / threshold tuning; hardware IF story |
+| **`voting`** | Consensus + push (≠ Signum) | Slower, vote-buffered sign changes |
+
+**Still paused:** `hybrid_v2` — stack with little unique upside vs Signum/Cosine unless used for ablations.
+
+---
+
 ## Recommended default (Bit-MLP / MNIST-style STE nets)
 
 | Setting | Recommendation |
@@ -152,11 +188,11 @@ Full MNIST, Bit-MLP, 15 epochs (see `FIT_TRAINING_ANALYSIS.md` for curves).
 
 ### `SparseSignOptimizer` (`sparse_sign`)
 
-- **Mechanism:** Momentum sign updates on a random (or magnitude-biased) subset; density can anneal `density_start → density_end`.  
+- **Mechanism:** Momentum sign updates on a random (or magnitude-biased) subset; density holds at `density_start` for `density_hold_frac` of training, then anneals to `density_end`; optional cosine LR.  
 - **Reason:** Weight-space dropout / cheaper steps; hardware-friendly sparse updates in principle.  
-- **Pros:** Same memory as Signum; potential regularization and sparse-hardware story.  
-- **Cons:** On fit MNIST, **under-fits** if sparse too early (train ~87%, best ~90%); CPU masks add overhead without sparse kernels.  
-- **Use when:** Ablations on sparsity; prefer density ≈ 1.0 until the model is nearly fit, then anneal.
+- **Pros:** Same memory as Signum; **fully fits** Bit-MLP when dense long enough (40-ep max-fit: **best 97.1%**, train 98% — see `SPARSE_SIGN_MAX_FIT.md`).  
+- **Cons:** At short budgets (15 ep) with early sparsity, **under-fits** (~90% test); needs more epochs or high `density_hold_frac`; CPU masks add overhead without sparse kernels.  
+- **Use when:** Longer train budgets; ablations on sparsity. For short runs prefer `ema_flip`. Max-fit recipe: `--optimizers sparse_sign --epochs 40`.
 
 ---
 

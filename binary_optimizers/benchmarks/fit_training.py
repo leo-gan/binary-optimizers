@@ -17,7 +17,11 @@ from typing import Any, Optional
 import torch
 import torch.nn as nn
 
-from binary_optimizers.models.mnist import create_mnist_bit_mlp, create_mnist_bit_mlp_large
+from binary_optimizers.models.mnist import (
+    create_mnist_bit_mlp,
+    create_mnist_bit_mlp_large,
+    create_mnist_swarm_mlp,
+)
 from binary_optimizers.optimizers.cosine_voting import CosineVotingOptimizer
 from binary_optimizers.optimizers.ema_flip import EMAFlipOptimizer
 from binary_optimizers.optimizers.hybrid_accumulator import HybridAccumulatorOptimizer
@@ -25,6 +29,8 @@ from binary_optimizers.optimizers.hybrid_v2 import HybridV2Optimizer
 from binary_optimizers.optimizers.signum import MomentumVotingOptimizer
 from binary_optimizers.optimizers.sparse_sign import SparseSignOptimizer
 from binary_optimizers.optimizers.ste import STEOptimizer
+from binary_optimizers.optimizers.swarm import SwarmOptimizer
+from binary_optimizers.optimizers.swarm_log_optimizer import SwarmLogOptimizer
 from binary_optimizers.optimizers.threshold_if import ThresholdedIntegrateFireOptimizer
 from binary_optimizers.optimizers.voting import VotingOptimizer
 from binary_optimizers.profiling.memory import profile_model_memory
@@ -45,42 +51,72 @@ from binary_optimizers.training.loops import (
 from binary_optimizers.training.param_groups import split_binary_and_bn_params
 
 
-# Default recommendation for Bit-MLP: ema_flip (see docs/optimizers.md).
-# Full suite order: recommended default first, then strong baselines, then research variants.
+# Active Bit-MLP optimizers (fit / checkpoint benchmarks).
+# Default Bit-MLP trainer: ema_flip (see docs/optimizers.md).
 FIT_OPTIMIZERS = (
-    "ema_flip",  # default binary trainer for Bit-MLP
+    "ema_flip",  # default
     "adam",
     "signum",
     "cosine_voting",
     "ste",
     "sparse_sign",
-    "threshold_if",
     "voting",
-    "hybrid_v2",
+    "threshold_if",
     "hybrid_accumulator",
 )
 
-# Highlighted in reports as binary-specialist suite (not "legacy vs new").
+# Swarm model × optimizer pairs (population layers; not interchangeable with Bit-MLP).
+FIT_SWARM_COMBINATIONS: tuple[tuple[str, str], ...] = (
+    ("swarm_mlp", "swarm"),
+    ("swarm_mlp", "swarm_log"),
+    ("swarm_mlp", "swarm_log_dynamic"),
+    # Float baseline on same swarm architecture (population as continuous)
+    ("swarm_mlp", "adam"),
+)
+
+PAUSED_OPTIMIZERS = (
+    "hybrid_v2",
+)
+
 BINARY_SPECIALISTS = (
     "ema_flip",
     "cosine_voting",
     "sparse_sign",
-    "hybrid_accumulator",
-    "hybrid_v2",
     "signum",
-    "threshold_if",
-    "voting",
     "ste",
+    "voting",
+    "threshold_if",
+    "hybrid_accumulator",
+    "swarm",
+    "swarm_log",
+    "swarm_log_dynamic",
 )
 
-# Back-compat alias used by report ranking flags
 NEW_OPTIMIZERS = BINARY_SPECIALISTS
-
 
 # Tag/schema: bump when training protocol or optimizer defaults change.
 FIT_TAG = "fit_v3"
-# BN continuous params optimized with Adam alongside binary optimizers.
 BN_ADAM_LR = 1e-3
+# Fit swarm uses same hidden as bit_mlp for a fairer width comparison; swarm_size=16.
+SWARM_FIT_HIDDEN = 128
+SWARM_FIT_SIZE = 16
+
+
+def default_fit_combinations(
+    *,
+    include_bit_mlp: bool = True,
+    include_swarm: bool = True,
+    bit_mlp_optimizers: tuple[str, ...] | list[str] | None = None,
+    model_name: str = "bit_mlp",
+) -> list[tuple[str, str]]:
+    """Return (model, optimizer) pairs for the comparison suite."""
+    combos: list[tuple[str, str]] = []
+    if include_bit_mlp:
+        opts = tuple(bit_mlp_optimizers or FIT_OPTIMIZERS)
+        combos.extend((model_name, o) for o in opts)
+    if include_swarm:
+        combos.extend(FIT_SWARM_COMBINATIONS)
+    return combos
 
 
 @dataclass
@@ -157,6 +193,10 @@ def _make_model(model_name: str) -> nn.Module:
         return create_mnist_bit_mlp(hidden_dim=128)
     if model_name == "bit_mlp_large":
         return create_mnist_bit_mlp_large(hidden_dim=256)
+    if model_name == "swarm_mlp":
+        return create_mnist_swarm_mlp(
+            hidden_dim=SWARM_FIT_HIDDEN, swarm_size=SWARM_FIT_SIZE
+        )
     raise ValueError(f"Unknown model: {model_name}")
 
 
@@ -213,14 +253,19 @@ def default_optimizer_kwargs(
             "bn_adam_lr": BN_ADAM_LR,
         }
     if name == "sparse_sign":
+        # Max-fit recipe: stay fully dense most of training, then light sparsity;
+        # cosine LR refine; long total_steps when epochs are increased.
         return {
-            "lr": 0.05,
+            "lr": 0.06,
+            "lr_min": 0.005,
             "momentum": 0.9,
-            "density": 0.8,
+            "density": 1.0,
             "density_start": 1.0,
-            "density_end": 0.45,
+            "density_end": 0.55,
+            "density_hold_frac": 0.75,
             "total_steps": total_steps,
             "clip": 1.5,
+            "confidence_threshold": 0.0,
             "magnitude_biased": True,
             "bn_adam_lr": BN_ADAM_LR,
         }
@@ -253,6 +298,32 @@ def default_optimizer_kwargs(
             "confidence_threshold": 0.0,
             "bn_adam_lr": BN_ADAM_LR,
         }
+    if name == "swarm":
+        return {
+            "recruit_rate": 50.0,
+            "bn_lr": 0.01,
+            "bn_adam_lr": BN_ADAM_LR,
+            "swarm_size": SWARM_FIT_SIZE,
+            "hidden_dim": SWARM_FIT_HIDDEN,
+        }
+    if name == "swarm_log":
+        return {
+            "threshold": 10,
+            "flip_prob": 0.1,
+            "dynamic": False,
+            "bn_adam_lr": BN_ADAM_LR,
+            "swarm_size": SWARM_FIT_SIZE,
+            "hidden_dim": SWARM_FIT_HIDDEN,
+        }
+    if name == "swarm_log_dynamic":
+        return {
+            "threshold": 10,
+            "flip_prob": 0.1,
+            "dynamic": True,
+            "bn_adam_lr": BN_ADAM_LR,
+            "swarm_size": SWARM_FIT_SIZE,
+            "hidden_dim": SWARM_FIT_HIDDEN,
+        }
     raise ValueError(f"Unknown optimizer: {name}")
 
 
@@ -261,8 +332,9 @@ def _make_binary_optimizer(
     params,
     kwargs: dict[str, Any],
 ) -> torch.optim.Optimizer:
-    """Build optimizer for binary (2D) weights only; strip dual-only keys."""
-    kw = {k: v for k, v in kwargs.items() if k != "bn_adam_lr"}
+    """Build optimizer for binary/swarm weights; strip dual-only / fingerprint-only keys."""
+    skip = {"bn_adam_lr", "swarm_size", "hidden_dim"}
+    kw = {k: v for k, v in kwargs.items() if k not in skip}
     if name == "ste":
         return STEOptimizer(params, lr=kw["lr"], momentum=kw["momentum"])
     if name == "voting":
@@ -291,6 +363,17 @@ def _make_binary_optimizer(
         return HybridAccumulatorOptimizer(params, **kw)
     if name == "hybrid_v2":
         return HybridV2Optimizer(params, **kw)
+    if name == "swarm":
+        return SwarmOptimizer(
+            params, recruit_rate=kw["recruit_rate"], bn_lr=kw.get("bn_lr", 0.01)
+        )
+    if name in ("swarm_log", "swarm_log_dynamic"):
+        return SwarmLogOptimizer(
+            params,
+            threshold=int(kw["threshold"]),
+            flip_prob=float(kw["flip_prob"]),
+            dynamic=bool(kw.get("dynamic", False)),
+        )
     raise ValueError(f"Unknown optimizer: {name}")
 
 
@@ -301,7 +384,7 @@ def _make_optimizer(
 ):
     """
     Adam: full-model Adam.
-    Others: binary weights via specialized opt + Adam on BN/bias (proposal).
+    Others: binary/swarm weights via specialized opt + Adam on BN/bias.
     """
     if name == "adam":
         return torch.optim.Adam(model.parameters(), lr=kwargs.get("lr", 1e-3))
@@ -346,18 +429,26 @@ def make_train_spec(
 @torch.no_grad()
 def evaluate_packed_accuracy(model: nn.Module, loader, device: str) -> float:
     """
-    Accuracy with 2D weights forced to ±1 (deployment / bitpacked proxy).
+    Deployment proxy accuracy.
 
-    Copies the model, signs all 2D parameters, evaluates STE/binary forward.
-    BN and 1D params are left unchanged.
+    - STE / 2D weights: force ±1 on each 2D param.
+    - Swarm 3D populations: collapse each connection to majority sign (then ±1).
+    BN / 1D params unchanged.
     """
     import copy
 
     m = copy.deepcopy(model).to(device)
     m.eval()
     for p in m.parameters():
-        if p.dim() >= 2:
-            p.data = torch.where(p.data >= 0, torch.ones_like(p.data), -torch.ones_like(p.data))
+        if p.dim() == 3:
+            # Majority over swarm agents → effective ±1 per connection stored in pop
+            maj = torch.sign(p.data.sum(dim=-1, keepdim=True))
+            maj = torch.where(maj == 0, torch.ones_like(maj), maj)
+            p.data = maj.expand_as(p.data)
+        elif p.dim() == 2:
+            p.data = torch.where(
+                p.data >= 0, torch.ones_like(p.data), -torch.ones_like(p.data)
+            )
     return evaluate_accuracy(m, loader, device)
 
 
@@ -477,6 +568,8 @@ def run_fit_training(
     *,
     optimizers: tuple[str, ...] | list[str] | None = None,
     model_name: str = "bit_mlp",
+    combinations: list[tuple[str, str]] | None = None,
+    include_swarm: bool = True,
     epochs: int = 15,
     num_trials: int = 1,
     seed: int = 42,
@@ -489,8 +582,22 @@ def run_fit_training(
     output_json: str | Path = "results/fit_training.json",
     eval_packed: bool = True,
 ) -> dict[str, Any]:
+    """
+    Fit-scale training over (model, optimizer) combinations.
+
+    Default: all FIT_OPTIMIZERS on ``model_name`` plus swarm model paths
+    (swarm / swarm_log / swarm_log_dynamic / adam on swarm_mlp).
+    """
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    optimizers = tuple(optimizers or FIT_OPTIMIZERS)
+    if combinations is None:
+        combinations = default_fit_combinations(
+            include_bit_mlp=True,
+            include_swarm=include_swarm,
+            bit_mlp_optimizers=optimizers or FIT_OPTIMIZERS,
+            model_name=model_name,
+        )
+    else:
+        combinations = list(combinations)
 
     from binary_optimizers.data.mnist import make_mnist_loaders
 
@@ -503,16 +610,16 @@ def run_fit_training(
     steps_per_epoch = len(train_loader)
     all_results: list[FitConfigResult] = []
 
-    for opt_name in optimizers:
-        cfg_name = f"{model_name}_{opt_name}"
+    for model_n, opt_name in combinations:
+        cfg_name = f"{model_n}_{opt_name}"
         print(f"\n=== FIT {cfg_name} ===")
         result = FitConfigResult(
-            name=cfg_name, optimizer=opt_name, model=model_name, epochs=epochs
+            name=cfg_name, optimizer=opt_name, model=model_n, epochs=epochs
         )
         for trial_i in range(num_trials):
             trial_seed = seed + trial_i
             spec = make_train_spec(
-                model_name=model_name,
+                model_name=model_n,
                 optimizer=opt_name,
                 epochs=epochs,
                 seed=trial_seed,
@@ -535,7 +642,8 @@ def run_fit_training(
     payload = {
         "meta": {
             "dataset": "mnist",
-            "model": model_name,
+            "models": sorted({m for m, _ in combinations}),
+            "combinations": [{"model": m, "optimizer": o} for m, o in combinations],
             "epochs": epochs,
             "num_trials": num_trials,
             "seed": seed,
@@ -547,9 +655,12 @@ def run_fit_training(
             "force_retrain": force_retrain,
             "tag": FIT_TAG,
             "schema_version": CHECKPOINT_SCHEMA_VERSION,
+            "swarm_fit_hidden": SWARM_FIT_HIDDEN,
+            "swarm_fit_size": SWARM_FIT_SIZE,
             "note": (
-                "Fit-scale MNIST with checkpoint cache. Retrain only if model/optimizer "
-                "fingerprint changes or --force-retrain."
+                "Fit-scale MNIST with checkpoint cache. Includes Bit-MLP and swarm "
+                "model×optimizer combinations. Retrain only if fingerprint changes "
+                "or --force-retrain."
             ),
         },
         "configs": [{**asdict(r), "summary": r.summary()} for r in all_results],
@@ -566,6 +677,8 @@ def benchmark_checkpoints(
     *,
     optimizers: tuple[str, ...] | list[str] | None = None,
     model_name: str = "bit_mlp",
+    combinations: list[tuple[str, str]] | None = None,
+    include_swarm: bool = True,
     epochs: int = 15,
     seed: int = 42,
     batch_size_train: int = 128,
@@ -576,11 +689,17 @@ def benchmark_checkpoints(
     output_json: str | Path = "results/checkpoint_benchmark.json",
 ) -> dict[str, Any]:
     """
-    Load saved models only (no training) and re-evaluate STE + packed accuracy.
-    Skips optimizers with no checkpoint.
+    Load saved models only (no training) and re-evaluate train-time + packed accuracy.
+    Skips combinations with no checkpoint.
     """
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    optimizers = tuple(optimizers or FIT_OPTIMIZERS)
+    if combinations is None:
+        combinations = default_fit_combinations(
+            include_bit_mlp=True,
+            include_swarm=include_swarm,
+            bit_mlp_optimizers=optimizers or FIT_OPTIMIZERS,
+            model_name=model_name,
+        )
     from binary_optimizers.data.mnist import make_mnist_loaders
 
     _train_loader, test_loader = make_mnist_loaders(
@@ -589,12 +708,11 @@ def benchmark_checkpoints(
         batch_size_test=batch_size_test,
         num_workers=0,
     )
-    # steps_per_epoch from train set size / batch
     steps_per_epoch = len(_train_loader)
     rows = []
-    for opt_name in optimizers:
+    for model_n, opt_name in combinations:
         spec = make_train_spec(
-            model_name=model_name,
+            model_name=model_n,
             optimizer=opt_name,
             epochs=epochs,
             seed=seed,
@@ -605,13 +723,14 @@ def benchmark_checkpoints(
             print(f"  [skip missing] {spec.slug()}")
             rows.append(
                 {
+                    "model": model_n,
                     "optimizer": opt_name,
                     "status": "missing",
                     "slug": spec.slug(),
                 }
             )
             continue
-        model = _make_model(model_name).to(device)
+        model = _make_model(model_n).to(device)
         meta = load_checkpoint(spec, model, root=checkpoint_root, map_location=device)
         t0 = time.perf_counter()
         ste_acc = evaluate_accuracy(model, test_loader, device)
@@ -619,6 +738,7 @@ def benchmark_checkpoints(
         dt = time.perf_counter() - t0
         m = meta.get("metrics") or {}
         row = {
+            "model": model_n,
             "optimizer": opt_name,
             "status": "ok",
             "slug": spec.slug(),
@@ -632,7 +752,7 @@ def benchmark_checkpoints(
         }
         rows.append(row)
         print(
-            f"  {opt_name:20s} ste={ste_acc:.4f} packed={packed_acc:.4f} "
+            f"  {model_n:12s} {opt_name:20s} ste={ste_acc:.4f} packed={packed_acc:.4f} "
             f"(cached best={m.get('best_test_acc')})"
         )
 
@@ -678,6 +798,7 @@ def analyze_fit_results(payload: dict[str, Any]) -> dict[str, Any]:
             issues.append("late_decay")
         diagnostics.append(
             {
+                "model": s.get("model"),
                 "optimizer": s["optimizer"],
                 "best_test": s["best_test_acc_mean"],
                 "final_test": s["final_test_acc_mean"],
@@ -692,7 +813,11 @@ def analyze_fit_results(payload: dict[str, Any]) -> dict[str, Any]:
             }
         )
 
-    best_overall = summaries_sorted[0]["optimizer"] if summaries_sorted else None
+    best_overall = (
+        f"{summaries_sorted[0].get('model')}+{summaries_sorted[0]['optimizer']}"
+        if summaries_sorted
+        else None
+    )
 
     proposals = [
         {
@@ -721,6 +846,7 @@ def analyze_fit_results(payload: dict[str, Any]) -> dict[str, Any]:
         "ranking": [
             {
                 "rank": i + 1,
+                "model": s.get("model"),
                 "optimizer": s["optimizer"],
                 "is_new": s.get("is_new", False),
                 "best_test_acc_mean": s["best_test_acc_mean"],
@@ -766,15 +892,15 @@ def render_fit_report(payload: dict[str, Any], analysis: dict[str, Any]) -> str:
         "",
         "## Ranking",
         "",
-        "| Rank | Opt | Best | Final | Packed | Gap | Time | Cache |",
-        "| :---: | :--- | ---: | ---: | ---: | ---: | ---: | :---: |",
+        "| Rank | Model | Opt | Best | Final | Packed | Gap | Time | Cache |",
+        "| :---: | :--- | :--- | ---: | ---: | ---: | ---: | ---: | :---: |",
     ]
     for r in analysis["ranking"]:
         pk = r.get("packed_test_acc_mean")
         pk_s = f"{pk:.4f}" if pk is not None else "—"
-        mark = " **(default)**" if r["optimizer"] == "ema_flip" else ""
+        mark = " **(default)**" if r["optimizer"] == "ema_flip" and r.get("model") == "bit_mlp" else ""
         lines.append(
-            f"| {r['rank']} | `{r['optimizer']}`{mark} | "
+            f"| {r['rank']} | `{r.get('model', '?')}` | `{r['optimizer']}`{mark} | "
             f"{r['best_test_acc_mean']:.4f} | {r['final_test_acc_mean']:.4f} | {pk_s} | "
             f"{r['train_test_gap_mean']:+.4f} | {r['total_time_mean_s']:.1f} | "
             f"{'yes' if r.get('from_cache') else 'no'} |"
@@ -784,18 +910,21 @@ def render_fit_report(payload: dict[str, Any], analysis: dict[str, Any]) -> str:
         f"**Best overall:** `{analysis.get('best_overall')}`  ",
         f"**Recommended default (Bit-MLP):** `ema_flip` — see `docs/optimizers.md`.",
         "",
+        "Swarm rows use `swarm_mlp` (population bits); packed = majority-vote collapse.",
+        "",
         "## Diagnostics",
         "",
-        "| Opt | Best | Final | Packed | Issues | Cache |",
-        "| :--- | ---: | ---: | ---: | :--- | :---: |",
+        "| Model | Opt | Best | Final | Packed | Issues | Cache |",
+        "| :--- | :--- | ---: | ---: | ---: | :--- | :---: |",
     ]
     for d in analysis["diagnostics"]:
         pk = d.get("packed")
         pk_s = f"{pk:.4f}" if pk is not None else "—"
         issues = ", ".join(d["issues"]) if d["issues"] else "—"
         lines.append(
-            f"| `{d['optimizer']}` | {d['best_test']:.4f} | {d['final_test']:.4f} | "
-            f"{pk_s} | {issues} | {'yes' if d.get('from_cache') else 'no'} |"
+            f"| `{d.get('model', '?')}` | `{d['optimizer']}` | {d['best_test']:.4f} | "
+            f"{d['final_test']:.4f} | {pk_s} | {issues} | "
+            f"{'yes' if d.get('from_cache') else 'no'} |"
         )
 
     lines += ["", "## Proposals", ""]

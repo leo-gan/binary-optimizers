@@ -23,10 +23,6 @@ class SwarmLogOptimizer(Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
-        # DEBUG: Print to ensure we are running
-        if torch.rand(1) < 0.01:
-            print("Optimizer Step Start (Sampled)")
-
         for group in self.param_groups:
             threshold = group["threshold"]
             flip_prob = group["flip_prob"]

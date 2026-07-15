@@ -147,10 +147,29 @@ def test_cosine_voting_lr_anneals():
 
 
 def test_sweep_includes_new_optimizers():
+    from binary_optimizers.benchmarks.training_sweep import (
+        ACTIVE_RESEARCH_OPTIMIZERS,
+        PAUSED_SWEEP_OPTIMIZERS,
+    )
+    from binary_optimizers.benchmarks.fit_training import (
+        FIT_OPTIMIZERS,
+        PAUSED_OPTIMIZERS,
+    )
+
     names = {c["name"] for c in DEFAULT_SWEEP_CONFIGS}
     for opt in NEW_OPTIMIZER_NAMES:
         assert f"mnist_small_{opt}" in names
         assert f"mnist_large_{opt}" in names
+    for opt in ACTIVE_RESEARCH_OPTIMIZERS:
+        assert f"mnist_small_{opt}" in names
+    for opt in PAUSED_SWEEP_OPTIMIZERS:
+        assert f"mnist_small_{opt}" not in names
+    for opt in PAUSED_OPTIMIZERS:
+        assert opt not in FIT_OPTIMIZERS
+    for opt in ("voting", "threshold_if", "hybrid_accumulator"):
+        assert opt in FIT_OPTIMIZERS
+    assert "ema_flip" in FIT_OPTIMIZERS
+    assert "hybrid_v2" in PAUSED_OPTIMIZERS
 
 
 def test_new_optimizer_comparison_builder():
@@ -225,3 +244,46 @@ def test_dual_optimizer_steps_bn():
     dual.zero_grad()
     nn.functional.cross_entropy(model(x), y).backward()
     dual.step()
+
+
+def test_swarm_fit_combinations_and_factory():
+    from binary_optimizers.benchmarks.fit_training import (
+        FIT_SWARM_COMBINATIONS,
+        _make_model,
+        _make_optimizer,
+        default_optimizer_kwargs,
+        default_fit_combinations,
+        evaluate_packed_accuracy,
+    )
+    from binary_optimizers.training.loops import set_seed
+    import torch.nn.functional as F
+
+    combos = default_fit_combinations(include_swarm=True)
+    assert any(m == "swarm_mlp" for m, _ in combos)
+    assert ("swarm_mlp", "swarm") in FIT_SWARM_COMBINATIONS
+    assert ("swarm_mlp", "swarm_log") in FIT_SWARM_COMBINATIONS
+
+    set_seed(0)
+    model = _make_model("swarm_mlp")
+    # has 3D population
+    assert any(p.dim() == 3 for p in model.parameters())
+    kw = default_optimizer_kwargs("swarm", steps_per_epoch=10, epochs=2)
+    opt = _make_optimizer("swarm", model, kw)
+    x = torch.randn(4, 1, 28, 28)
+    y = torch.randint(0, 10, (4,))
+    opt.zero_grad()
+    F.cross_entropy(model(x), y).backward()
+    opt.step()
+
+    kw2 = default_optimizer_kwargs("swarm_log", steps_per_epoch=10, epochs=2)
+    opt2 = _make_optimizer("swarm_log", model, kw2)
+    opt2.zero_grad()
+    F.cross_entropy(model(x), y).backward()
+    opt2.step()
+
+    # packed eval runs
+    class _L:
+        def __iter__(self):
+            yield x, y
+    acc = evaluate_packed_accuracy(model, _L(), "cpu")
+    assert 0.0 <= acc <= 1.0
