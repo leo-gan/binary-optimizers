@@ -115,6 +115,13 @@ VERSION_LINEAGE: list[dict[str, Any]] = [
 
 _LN_ORDER = ("none", "no_affine", "affine")
 _EXP_ORDER = ("v0_1", "v0_2", "v0_3", "v0_4")
+STE_VS_SWARM_ID = "ste_vs_swarm"
+_METHOD_ORDER = ("ste_sgd", "swarm_v0_3", "swarm_v0_4")
+_METHOD_LABELS = {
+    "ste_sgd": "STE (SGD+clamp)",
+    "swarm_v0_3": "Swarm v0.3 (carry-safe)",
+    "swarm_v0_4": "Swarm v0.4 (ternary)",
+}
 
 
 def _ln_mode_from_run(run: Mapping[str, Any]) -> str | None:
@@ -125,8 +132,23 @@ def _ln_mode_from_run(run: Mapping[str, Any]) -> str | None:
     m = re.match(r"^ln_(none|no_affine|affine)$", str(name))
     if m:
         return m.group(1)
+    # ste_sgd_ln_affine → affine
+    m2 = re.search(r"_ln_(none|no_affine|affine)$", str(name))
+    if m2:
+        return m2.group(1)
     if str(name).startswith("ln_"):
         return str(name)[3:]
+    return None
+
+
+def _method_from_run(run: Mapping[str, Any]) -> str | None:
+    cfg = run.get("config") or {}
+    if isinstance(cfg, dict) and cfg.get("method") is not None:
+        return str(cfg["method"])
+    name = str(run.get("name") or "")
+    for m in _METHOD_ORDER:
+        if name.startswith(m + "_") or name == m:
+            return m
     return None
 
 
@@ -155,8 +177,11 @@ def _sort_experiments(ids: Sequence[str]) -> list[str]:
 
 def collect_run_grid(
     runs: Sequence[Mapping[str, Any]],
+    *,
+    exclude_experiments: Sequence[str] | None = None,
 ) -> dict[str, dict[str, dict[str, Any]]]:
     """experiment -> ln_mode -> best run dict (by best_test_acc)."""
+    skip = set(exclude_experiments or ())
     grid: dict[str, dict[str, dict[str, Any]]] = {}
     for run in runs:
         if run.get("status") and run["status"] != STATUS_COMPLETED:
@@ -164,6 +189,8 @@ def collect_run_grid(
             if run.get("best_test_acc") is None:
                 continue
         exp = str(run.get("experiment") or "unknown")
+        if exp in skip:
+            continue
         ln = _ln_mode_from_run(run)
         if ln is None:
             ln = str(run.get("name") or "unknown")
@@ -174,6 +201,187 @@ def collect_run_grid(
             bucket[ln] = dict(run)
             bucket[ln]["_ln_mode"] = ln
     return grid
+
+
+def collect_method_ln_grid(
+    runs: Sequence[Mapping[str, Any]],
+    *,
+    experiment: str = STE_VS_SWARM_ID,
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """method -> ln_mode -> best run (for ste_vs_swarm-style comparisons)."""
+    grid: dict[str, dict[str, dict[str, Any]]] = {}
+    for run in runs:
+        if str(run.get("experiment") or "") != experiment:
+            continue
+        if run.get("status") and run["status"] != STATUS_COMPLETED:
+            if run.get("best_test_acc") is None:
+                continue
+        method = _method_from_run(run)
+        ln = _ln_mode_from_run(run)
+        if method is None or ln is None:
+            continue
+        acc = run.get("best_test_acc")
+        bucket = grid.setdefault(method, {})
+        prev = bucket.get(ln)
+        if prev is None or (
+            acc is not None
+            and (prev.get("best_test_acc") is None or acc > prev["best_test_acc"])
+        ):
+            bucket[ln] = dict(run)
+            bucket[ln]["_method"] = method
+            bucket[ln]["_ln_mode"] = ln
+    return grid
+
+
+def format_ste_vs_swarm_section(
+    method_grid: dict[str, dict[str, dict[str, Any]]],
+) -> str:
+    """Markdown section: STE vs Swarm under shared protocol."""
+    if not method_grid:
+        return (
+            "## STE vs Swarm (shared protocol)\n\n"
+            "_No `ste_vs_swarm` runs in the store yet. "
+            "Run `python experiments/ste_vs_swarm/train.py` "
+            "(see `experiments/ste_vs_swarm/PROTOCOL.md`)._\n"
+        )
+
+    methods = [m for m in _METHOD_ORDER if m in method_grid]
+    methods += sorted(m for m in method_grid if m not in _METHOD_ORDER)
+    ln_cols = [ln for ln in _LN_ORDER if any(ln in method_grid[m] for m in methods)]
+    for m in methods:
+        for ln in method_grid[m]:
+            if ln not in ln_cols:
+                ln_cols.append(ln)
+
+    lines = [
+        "## STE vs Swarm (shared protocol)",
+        "",
+        "Matched MNIST protocol: same MLP topology (H=128), ReLU, batch 128, "
+        "early-stop on test acc (patience 10), seed 42, LN modes as above. "
+        "See `experiments/ste_vs_swarm/PROTOCOL.md`.",
+        "",
+        "### Best test accuracy by method × LayerNorm",
+        "",
+    ]
+    headers = ["method"] + list(ln_cols) + ["best", "best_mode", "wall_s"]
+    lines.append("| " + " | ".join(headers) + " |")
+    lines.append("| :--- | " + " | ".join([":---:" for _ in headers[1:]]) + " |")
+
+    for method in methods:
+        row_accs: dict[str, float | None] = {}
+        row_runs: dict[str, dict[str, Any]] = {}
+        for ln in ln_cols:
+            r = method_grid.get(method, {}).get(ln)
+            if r is None:
+                row_accs[ln] = None
+            else:
+                row_accs[ln] = r.get("best_test_acc")
+                row_runs[ln] = r
+        best_ln = None
+        best_acc: float | None = None
+        for ln, acc in row_accs.items():
+            if acc is None:
+                continue
+            if best_acc is None or acc > best_acc:
+                best_acc = acc
+                best_ln = ln
+        wall = row_runs[best_ln].get("wall_sec") if best_ln and best_ln in row_runs else None
+        label = _METHOD_LABELS.get(method, method)
+        cells = [label]
+        for ln in ln_cols:
+            cells.append(_fmt_acc(row_accs[ln]))
+        cells.append(_fmt_acc(best_acc))
+        cells.append(best_ln or "—")
+        cells.append(f"{wall:.0f}" if wall is not None else "—")
+        lines.append("| " + " | ".join(cells) + " |")
+    lines.append("")
+
+    # Analysis
+    lines.append("### Comparison notes")
+    lines.append("")
+    overall: tuple[str, str, float] | None = None
+    for method in methods:
+        for ln, r in method_grid[method].items():
+            acc = r.get("best_test_acc")
+            if acc is None:
+                continue
+            if overall is None or float(acc) > overall[2]:
+                overall = (method, ln, float(acc))
+    if overall:
+        lines.append(
+            f"- **Best under protocol:** `{overall[0]}` / `ln_mode={overall[1]}` "
+            f"→ **{overall[2]:.4f}**."
+        )
+
+    # STE vs each swarm at same ln_mode
+    if "ste_sgd" in method_grid:
+        delta_lines: list[str] = []
+        for swarm in ("swarm_v0_3", "swarm_v0_4"):
+            if swarm not in method_grid:
+                continue
+            parts = []
+            for ln in ln_cols:
+                a = method_grid["ste_sgd"].get(ln, {}).get("best_test_acc")
+                b = method_grid[swarm].get(ln, {}).get("best_test_acc")
+                if a is None or b is None:
+                    continue
+                parts.append(f"{ln}: {_pp(float(b) - float(a))}")
+            if parts:
+                delta_lines.append(f"  - `{swarm}`: " + "; ".join(parts))
+        if delta_lines:
+            lines.append("- **Swarm − STE (same `ln_mode`, percentage points):**")
+            lines.extend(delta_lines)
+
+    if "swarm_v0_3" in method_grid and "swarm_v0_4" in method_grid:
+        parts = []
+        for ln in ln_cols:
+            a = method_grid["swarm_v0_3"].get(ln, {}).get("best_test_acc")
+            b = method_grid["swarm_v0_4"].get(ln, {}).get("best_test_acc")
+            if a is None or b is None:
+                continue
+            parts.append(f"{ln}: {_pp(float(b) - float(a))}")
+        if parts:
+            lines.append("- **v0.4 − v0.3 (same protocol):** " + "; ".join(parts))
+
+    lines.append(
+        "- **Interpretation:** STE uses FP latent weights + sign STE; Swarm is "
+        "latent-free discrete coding. Prefer `none` / `no_affine` for pure "
+        "comparisons; `affine` adds FP γ,β for both sides when enabled."
+    )
+    lines.append("")
+
+    # detail
+    lines.append("### STE vs Swarm per-run detail")
+    lines.append("")
+    lines.append(
+        "| method | ln_mode | seed | best_test | best_epoch | wall_s | epochs_ran |"
+    )
+    lines.append("| :--- | :--- | ---: | ---: | ---: | ---: | ---: |")
+    for method in methods:
+        for ln in list(_LN_ORDER) + sorted(
+            k for k in method_grid[method] if k not in _LN_ORDER
+        ):
+            r = method_grid[method].get(ln)
+            if r is None:
+                continue
+            summary = r.get("summary") or {}
+            epochs = summary.get("epochs_ran") if isinstance(summary, dict) else None
+            seed = r.get("seed")
+            wall = r.get("wall_sec")
+            be = r.get("best_epoch")
+            lines.append(
+                "| {method} | {ln} | {seed} | {acc} | {be} | {wall} | {ep} |".format(
+                    method=method,
+                    ln=ln,
+                    seed="" if seed is None else str(seed),
+                    acc=_fmt_acc(r.get("best_test_acc")),
+                    be="" if be is None else str(be),
+                    wall=f"{wall:.0f}" if wall is not None else "—",
+                    ep="" if epochs is None else str(epochs),
+                )
+            )
+    lines.append("")
+    return "\n".join(lines)
 
 
 def format_ln_modes_section() -> str:
@@ -425,28 +633,48 @@ def build_report(
     init_db(conn)
     runs = list_runs(conn, experiment=experiment, order_by="experiment", descending=False)
     # list_runs orders by experiment string; re-filter status
-    runs = [r for r in runs if r.get("status") in (None, STATUS_COMPLETED) or r.get("best_test_acc") is not None]
-    grid = collect_run_grid(runs)
+    runs = [
+        r
+        for r in runs
+        if r.get("status") in (None, STATUS_COMPLETED) or r.get("best_test_acc") is not None
+    ]
+
+    # Swarm lineage tables exclude the method-comparison experiment.
+    lineage_runs = [r for r in runs if str(r.get("experiment")) != STE_VS_SWARM_ID]
+    comparison_runs = [r for r in runs if str(r.get("experiment")) == STE_VS_SWARM_ID]
+    # If user filtered to ste_vs_swarm only, skip empty lineage noise.
+    if experiment == STE_VS_SWARM_ID:
+        lineage_runs = []
+    elif experiment is not None:
+        comparison_runs = []
+
+    grid = collect_run_grid(lineage_runs)
+    method_grid = collect_method_ln_grid(comparison_runs)
     present = _sort_experiments(list(grid.keys()))
+    n_runs = sum(len(v) for v in grid.values()) + sum(len(v) for v in method_grid.values())
 
     parts = [
         "# Experiment analysis report",
         "",
         "Source: DuckDB experiment store"
         + (f" (filter: experiment={experiment})" if experiment else " (all experiments)")
-        + f". Runs used: **{sum(len(v) for v in grid.values())}**.",
+        + f". Runs used: **{n_runs}**.",
         "",
         format_ln_modes_section(),
-        format_version_section(present if experiment is None else present),
-        format_pivot_table(grid),
-        format_analysis(grid),
     ]
-    if include_detail:
-        parts.append(format_detail_table(grid))
+    if experiment is None or experiment != STE_VS_SWARM_ID:
+        parts.append(format_version_section(present if experiment is None else present))
+        if grid:
+            parts.append(format_pivot_table(grid))
+            parts.append(format_analysis(grid))
+            if include_detail:
+                parts.append(format_detail_table(grid))
+    if experiment is None or experiment == STE_VS_SWARM_ID:
+        parts.append(format_ste_vs_swarm_section(method_grid))
     parts.append(
         "---\n\n"
-        "*Regenerate: `python -m binary_optimizers.store report`. "
-        "Refresh data: `python -m binary_optimizers.store import`.*"
+        "*Regenerate: `python -m binary_optimizers.store report` or `./scripts/report.sh`. "
+        "STE vs Swarm: `python experiments/ste_vs_swarm/train.py`.*"
     )
     return "\n".join(parts)
 

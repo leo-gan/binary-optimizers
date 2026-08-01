@@ -45,3 +45,37 @@ Refresh the DB from JSON exports (if any) with:
 ```bash
 uv run python -m binary_optimizers.store import
 ```
+
+## `run_ste_vs_swarm.sh`
+
+Shared-protocol MNIST comparison: STE (`ste_sgd`) vs Swarm v0.3 / v0.4.
+Each run is logged to DuckDB (`experiment=ste_vs_swarm`). See
+`experiments/ste_vs_swarm/PROTOCOL.md`.
+
+```bash
+# Full grid (long on CPU)
+./scripts/run_ste_vs_swarm.sh
+
+# Subset
+./scripts/run_ste_vs_swarm.sh --methods ste_sgd,swarm_v0_3 --ln-mode affine
+
+# Full lineage + STE vs Swarm report
+./scripts/report.sh
+
+# STE vs Swarm only
+./scripts/report_ste_vs_swarm.sh
+```
+
+## `report_ste_vs_swarm.sh`
+
+Prints only the **STE vs Swarm** analysis from DuckDB (method × LN table,
+Swarm−STE deltas, per-run detail). Equivalent to:
+
+`uv run python -m binary_optimizers.store report --experiment ste_vs_swarm`
+
+```bash
+./scripts/report_ste_vs_swarm.sh
+./scripts/report_ste_vs_swarm.sh > results/ste_vs_swarm_report.md
+```
+
+If the section is empty, train first with `./scripts/run_ste_vs_swarm.sh`.

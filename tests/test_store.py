@@ -297,5 +297,6 @@ def test_build_report_contains_sections(conn):
     assert "Simple analysis" in text
     assert "0.9400" in text or "0.94" in text
     assert "Per-run detail" in text
+    assert "STE vs Swarm" in text  # placeholder or data section always present
     text_nodetail = build_report(conn, include_detail=False)
     assert "Per-run detail" not in text_nodetail
