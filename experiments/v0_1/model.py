@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Literal, Sequence
+from typing import List, Literal
 
 import torch
 import torch.nn as nn
@@ -73,7 +73,8 @@ class BitNetSwarmMLP(nn.Module):
         self.linears.append(Int8SwarmLinear(in_dim, 10, swarm_size))
 
     def swarm_layers(self) -> List[Int8SwarmLinear]:
-        return list(self.linears)
+        # isinstance narrows ModuleList elements for type checkers.
+        return [m for m in self.linears if isinstance(m, Int8SwarmLinear)]
 
     def ln_parameters(self) -> List[nn.Parameter]:
         """Trainable LayerNorm affine params (empty unless ln_mode=affine)."""
@@ -95,10 +96,12 @@ class BitNetSwarmMLP(nn.Module):
 
     @torch.no_grad()
     def assert_binary_invariants(self) -> None:
-        for layer in self.linears:
+        for layer in self.swarm_layers():
             p = layer.population
             assert p.dtype == torch.int8, p.dtype
-            uniq = set(p.unique().tolist())
+            # torch.unique(...) type-checks cleanly; Tensor.unique() does not
+            # under current PyTorch stubs (seen as non-callable Tensor).
+            uniq = set(torch.unique(p).tolist())
             assert uniq.issubset({-1, 1}), uniq
 
 
