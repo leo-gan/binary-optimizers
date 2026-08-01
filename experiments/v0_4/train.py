@@ -8,7 +8,7 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 import torch
 import torch.nn.functional as F
@@ -19,6 +19,7 @@ sys.path.insert(0, str(_REPO_ROOT))
 sys.path.insert(0, str(_THIS_DIR))
 
 from binary_optimizers.data.mnist import make_mnist_loaders
+from binary_optimizers.store import soft_record_completed_run
 from binary_optimizers.training.loops import set_seed
 
 from metrics import swarm_stats
@@ -162,15 +163,59 @@ def train_one_mode(**kw) -> Dict[str, Any]:
         json.dump(out, f, indent=2)
     ck = _REPO_ROOT / "checkpoints" / "v0_4"
     ck.mkdir(parents=True, exist_ok=True)
+    ck_path = ck / f"ln_{ln_mode}_seed{kw['seed']}.pt"
     torch.save(
         {
             "model_state": model.state_dict(),
             "meta": {k: v for k, v in out.items() if k != "history"},
         },
-        ck / f"ln_{ln_mode}_seed{kw['seed']}.pt",
+        ck_path,
     )
     out["json_path"] = str(jp)
     print(f"Saved {jp}", flush=True)
+
+    # Dual-write to DuckDB experiment store (soft-fail: never abort training).
+    config = {
+        "coding": out["coding"],
+        "ln_mode": ln_mode,
+        "hidden": out["hidden"],
+        "n_trits": out["n_trits"],
+        "recruit_rate": out["recruit_rate"],
+        "max_step_prob": out["max_step_prob"],
+        "grad_momentum": out["grad_momentum"],
+        "activation": out["activation"],
+        "device": out["device"],
+        "max_step": kw.get("max_step", 64),
+        "step_scale": kw.get("step_scale", 1e6),
+        "ln_lr": kw.get("ln_lr"),
+        "epochs": kw.get("epochs"),
+        "patience": kw.get("patience"),
+        "min_delta": kw.get("min_delta"),
+    }
+    summary = {
+        "epochs_ran": out["epochs_ran"],
+        "baseline_v0_2_best": out.get("baseline_v0_2_best"),
+        "baseline_v0_3_note": out.get("baseline_v0_3_note"),
+        "swarm_stats_final": out.get("swarm_stats_final"),
+        "source_json": str(jp),
+    }
+    run_id = soft_record_completed_run(
+        experiment="v0_4",
+        name=f"ln_{ln_mode}",
+        config=config,
+        history=history,
+        seed=kw["seed"],
+        wall_sec=out["wall_sec"],
+        best_test_acc=out["best_test_acc"],
+        best_epoch=out["best_epoch"],
+        final_test_acc=out["final_test_acc"],
+        final_test_loss=out["final_test_loss"],
+        summary=summary,
+        checkpoint_path=ck_path,
+    )
+    if run_id:
+        out["run_id"] = run_id
+        print(f"Stored run_id={run_id}", flush=True)
     return out
 
 
