@@ -1,4 +1,11 @@
+# --- Datasets (download locally; never commit) ---
+data/
+MNIST/
+**/MNIST/
 cifar-10-batches-py/
+**/cifar-10-batches-py/
+cifar-10-python.tar.gz
+**/cifar-10-python.tar.gz
 
 __pycache__/
 *.py[cod]
@@ -14,4 +21,6 @@ dist/
 .pytest_cache/
 .ruff_cache/
 
-cifar-10-python.tar.gz
+# Local experiment artifacts (optional large outputs)
+checkpoints/
+results/
