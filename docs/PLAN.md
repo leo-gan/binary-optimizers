@@ -118,7 +118,7 @@ BitNet-inspired in spirit (low-bit linears, optional pre-norm). Not a large LLM.
 
 ### 3.2 Weight as a discrete register (v0.3)
 
-Each connection stores **n** bits \(b_i \in \{0,1\}\):
+Each **weight** stores **n** bits \(b_i \in \{0,1\}\):
 
 1. Integer \(v = \sum_i b_i 2^i\) in \(\{0,\ldots,2^n-1\}\).  
 2. Weight \(w = 2v/(2^n-1) - 1 \in [-1,1]\).
@@ -135,8 +135,8 @@ Do not confuse these—they answer different research questions:
 | **Unary population size** \(S\) | v0.1 | How many equal-weight ±1 agents vote for one logical weight |
 | **Register width** \(n\) (bits / trits) | v0.2–v0.4 | How many **place-value digits** encode one weight |
 
-Both are “how much discrete state per connection.”  
-**Question 1 below** covers both families and asks whether a shared law exists.
+Both are “how much discrete state **per weight**.”  
+**Question A below** covers both families and asks whether a shared law exists.
 
 ---
 
@@ -144,7 +144,7 @@ Both are “how much discrete state per connection.”
 
 ### 4.1 Question A — Swarm / register size: what does width buy?
 
-**Plain question.** For each connection we store a **batch of discrete units**
+**Plain question.** For each **weight** we store a **batch of discrete units**
 (agents or bits). How large should that batch be—8, 16, 32, 64, 128, 1024, more?
 
 **Why it might matter**
@@ -152,10 +152,11 @@ Both are “how much discrete state per connection.”
 | Small width | Large width |
 |-------------|-------------|
 | Few distinct weight levels; coarse steps | Many levels; fine steps and large dynamic range |
-| Cheap memory and updates | Expensive per connection |
+| Cheap memory and updates | Expensive **per weight** |
 | May underfit or oscillate | May over-parameterize the *representation* (not the network topology) |
 
-This is **not** the same as “wider network” (more neurons). It is **more bits of state per edge**.
+This is **not** the same as “wider network” (more neurons → more weights). It is
+**more bits of state per weight**, with the layer shape held fixed.
 
 **Hypotheses (to test, not assume)**
 
