@@ -14,38 +14,39 @@ Protocol: MNIST MLP `hidden=128`, `ln_mode=none`, seed 42, early stop 80/10.
 
 ## Register curve (seed 42, ln=none)
 
-| n_bits | best test acc | note |
-|-------:|--------------:|------|
-| 8 | ~0.963 | strong |
-| 16 | ~0.959 | strong |
-| 32 | ~0.893 | plateau / drop |
-| 48 | ~0.897 | plateau |
-| 62 | ~0.892 | plateau (int64 max) |
+| n_bits | best test acc | epochs |
+|-------:|--------------:|-------:|
+| 8 | 0.9633 | 35 |
+| 16 | 0.9589 | 74 |
+| 32 | 0.8926 | 29 |
+| 48 | 0.8972 | 52 |
+| 62 | 0.8923 | 40 |
 
-**Takeaway (preliminary):** On this net, **small registers (8–16) beat wide ones**.  
-Extra bits are not free wins under fixed train defaults + proportional Δv. “16 is special”
-is partly “we tried 16,” but **8 is competitive or better** here; 32–62 look saturated
-around ~0.89–0.90. Not multi-seed; representation signal only.
+**Takeaway:** On this net, **small registers (8–16) beat wide ones**. Extra bits are not
+free wins under fixed train defaults + proportional Δv. “16 is special” is partly “we
+tried 16,” but **8 is competitive or better** here; 32–62 plateau around ~0.89–0.90.
+Not multi-seed; representation signal only.
 
 ## Unary curve (seed 42, ln=none)
 
-| S | best test acc |
-|--:|--------------:|
-| 8 | ~0.860 |
-| 16 | ~0.893 |
-| 32 | ~0.924 |
-| 64 | ~0.940 |
-| 128+ | see `results/v0_5_width_unary/` |
+| S | best test acc | epochs |
+|--:|--------------:|-------:|
+| 8 | 0.8598 | 13 |
+| 16 | 0.8930 | 11 |
+| 32 | 0.9239 | 29 |
+| 64 | 0.9398 | 16 |
+| 128 | 0.9570 | 35 |
+| 256 | 0.9617 | 26 |
 
-**Takeaway (preliminary):** Unary **keeps improving with S** through at least 64–128
-(unlike the register family under the same protocol spirit). Population size and register
-width are **not interchangeable** axes.
+**Takeaway:** Unary **keeps improving with S** through 256 (gains slow after 128).
+Unlike the register family, more agents help. Population size and register width are
+**not interchangeable** axes. Optional 512/1024 left for later if wanted.
 
 ## Next (Plan §7)
 
-1. Finish unary grid as far as compute allows (256, optionally 512/1024).  
+1. Optional: unary S=512/1024 if compute allows.  
 2. `v0_6_encoding` — fixed total bit budget, exp/mantissa splits.  
-3. Sparse scaling check only after curves exist.
+3. Sparse scaling check only after encoding curves exist.
 
 ## Re-run
 
