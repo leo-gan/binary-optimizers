@@ -1,7 +1,7 @@
 # Swarm / latent-free training — roadmap
 
 **Branch:** `plan/swarm-roadmap`  
-**Last updated:** 2026-07-31 (research focus: swarm size + exponential encoding)  
+**Last updated:** 2026-07-31 (Coding column explained for v0.1–v0.4)  
 **Status:** v0.1–v0.4 complete as *existence proofs*; next work is representation science, not tuning
 
 This document is the living plan for latent-free binary/ternary Swarm optimizers
