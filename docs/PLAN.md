@@ -8,6 +8,11 @@ This document is the living plan for latent-free binary/ternary Swarm optimizers
 (BitNet-inspired layers, no FP master weights). Experiment folders use semantic
 minor versioning: `experiments/v0_N/`.
 
+**Terminology (preferred):** use **weight** for one entry of a weight matrix (one
+learnable link between two units). Do **not** use “connection” for that idea.
+An **agent** is one discrete item in the per-weight swarm (project term; not
+standard BitNet jargon).
+
 ---
 
 ## 1. Goal (research claim)
