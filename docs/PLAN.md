@@ -66,6 +66,129 @@ Background notes: `docs/temp/research.md`, `docs/temp/deep-research-report.md`.
 
 Numbers also in DuckDB `results/experiments.duckdb` when ingested.
 
+#### What “Coding” means in the table above
+
+**Coding** is *how one **weight** is represented as discrete pieces of state*, and *how
+those pieces are turned into a number used in the matrix multiply*.
+
+It is **not** the same as the **Update** column (how training changes that state).
+The same coding family can pair with different updates (v0.2 and v0.3 both use
+binary place-value-like storage; only v0.3 is carry-safe on the integer).
+
+Think of coding as: **storage alphabet + how each piece is valued + decode formula**.
+
+It is also **not** LayerNorm mode, not optimizer hyperparameters, and not layer width
+(784→128→10). “Swarm size” alone is not the whole story: in v0.1 the budget is
+population size \(S\); in v0.2–v0.4 it is how many **digits** \(n\) under a different coding.
+
+##### v0.1 — Unary majority, int8 ±1, S=32
+
+**Alphabet:** each of \(S\) agents (default 32) is only **+1 or −1** (stored as int8).
+
+**Equal place values:** every agent counts the **same**. There is no “this agent is
+worth 8.” That is what **unary** means here: like tally marks, not like binary digits.
+
+**Decode (how the weight is used in the forward pass):**
+
+1. Sum (or average) the agents.  
+2. Take the **sign** of that sum (majority vote). Ties forced to +1.  
+3. The effective weight is essentially **binary**: mostly **−1 or +1**, not a fine
+   multi-level number.
+
+So one weight is a **committee of equal voters**, not a binary integer. With 32 agents
+the *effective* forward weight is still coarse (majority ±1), while the sum can take
+many intermediate values used as a soft path for gradients (manual STE through the
+sum / normalized sum).
+
+**Intuition:** “32 equal ±1 chips; the weight’s direction is whatever the majority says.”
+
+##### v0.2 — Place \(2^i\), multi-level \(s_{\mathrm{norm}}\)
+
+**Alphabet:** still discrete ±1 (bit-like) units, length \(n\) (default **16**).
+
+**Unequal place values:** unit index \(i\) is worth **\(2^i\)** (1, 2, 4, 8, …).
+Low indices are fine steps; high indices are large steps.
+
+**Decode:**
+
+\[
+s = \sum_i a_i \cdot 2^i,\qquad
+s_{\mathrm{norm}} = s \Big/ \sum_j 2^j
+\]
+
+so \(s_{\mathrm{norm}}\) lies in a range like \([-1, 1]\). The forward pass uses this
+**multi-level** value (not only majority ±1). Flipping a low bit changes \(w\) a little;
+flipping a high bit changes it a lot.
+
+**Intuition:** “The discrete state is a **binary number-like** object (signed place
+values), not a ballot of equal votes.” First **exponential / place-value** coding in
+the ladder.
+
+**Note:** In v0.2, **updates** still flipped bits somewhat independently (with LSB bias).
+The *coding* is place-value; the *update* was not yet fully carry-safe.
+
+##### v0.3 — Binary register \(v \in [0, 2^n-1]\)
+
+**Alphabet:** bits \(b_i \in \{0, 1\}\) (not ±1 agents). Length \(n\) (default **16**).
+
+**Coding as a normal unsigned binary integer:**
+
+\[
+v = \sum_i b_i \cdot 2^i \in \{0, 1, \ldots, 2^n - 1\}
+\]
+
+**Decode to a weight in about \([-1, 1]\):**
+
+\[
+w = \frac{2v}{2^n - 1} - 1
+\]
+
+So \(v = 0\) → \(w = -1\), \(v = 2^n-1\) → \(w = +1\), middle → near 0. This is
+**fixed-point-style** coding: all bits are place-value digits of one integer, then
+scaled to a weight.
+
+Compared to v0.2: same idea of **powers of two**, but storage is clean **0/1 bits**
+and decode is “integer → scaled weight.” The **Update** column (carry-safe ±Δ on \(v\),
+then re-encode bits) is separate from this coding definition.
+
+**Intuition:** “Each weight is a small **binary counter** from 0 to \(2^n-1\), mapped
+to \([-1,1]\).”
+
+##### v0.4 — Balanced ternary, places \(3^i\)
+
+**Alphabet:** digits \(d_i \in \{-1, 0, +1\}\) (**trits**), length \(n\) (default **10**).
+
+**Place values base 3:** digit \(i\) is worth **\(3^i\)** (1, 3, 9, 27, …).
+
+**Coding (balanced ternary):** form
+
+\[
+s = \sum_i d_i \cdot 3^i
+\]
+
+which uniquely represents integers in a symmetric range around zero
+\(\bigl[-(3^n-1)/2,\, (3^n-1)/2\bigr]\). Then normalize \(w = s / s_{\max}\) into about
+\([-1, 1]\).
+
+**Why “balanced”:** digits can be negative, zero, or positive, so you do not need a
+separate sign bit in the same way as ordinary binary; zero digits give **natural
+sparsity**.
+
+**Update** (separate column): carry-safe steps on that integer, then re-encode to
+ternary digits.
+
+**Intuition:** “Each weight is a **base-3 number** with digits −1, 0, +1, mapped to a
+real weight in \([-1,1]\).”
+
+##### Side-by-side (coding only)
+
+| Version | What is stored per weight | How pieces are valued | Forward weight |
+|---------|---------------------------|------------------------|----------------|
+| **v0.1** | \(S\) values in {−1,+1} | **Equal** (unary) | Mostly **±1** via majority (coarse) |
+| **v0.2** | \(n\) values with place \(2^i\) | **Powers of 2** | **Many levels** via \(s_{\mathrm{norm}}\) |
+| **v0.3** | \(n\) bits in {0,1} | **Powers of 2** as integer \(v\) | **Many levels** via scaled \(v\) |
+| **v0.4** | \(n\) digits in {−1,0,+1} | **Powers of 3** | **Many levels** + possible **zeros** |
+
 ### 2.2 Design decisions locked in
 
 | Decision | Choice |
