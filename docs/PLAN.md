@@ -1,8 +1,8 @@
 # Swarm / latent-free training — roadmap
 
 **Branch:** `plan/swarm-roadmap`  
-**Last updated:** 2026-07-31 (plain-language expansions for §2.4, §3, next-step #3)  
-**Status:** v0.1–v0.4 complete; tooling for comparison/store partially done
+**Last updated:** 2026-07-31 (research focus: swarm size + exponential encoding)  
+**Status:** v0.1–v0.4 complete as *existence proofs*; next work is representation science, not tuning
 
 This document is the living plan for latent-free binary/ternary Swarm optimizers
 (BitNet-inspired layers, no FP master weights). Experiment folders use semantic
@@ -16,12 +16,26 @@ Train networks whose **weight state is discrete** (binary agents / bits / trits)
 updated by **Swarm rules** (votes, place-value registers, carry-safe ±Δ), so
 training does **not** keep a full-precision latent \(W\) (unlike BitNet QAT / STE).
 
+### 1.1 Research stance (current)
+
+We are exploring the **whole idea** of Swarm representations—not polishing a recipe.
+
+| Do now | Do **not** prioritize now |
+|--------|---------------------------|
+| Change **how weights are represented** (size of swarm / register, exponential coding) | Multi-seed error bars for ±0.5% claims |
+| Look for **generic rules** (like scaling laws: how optimum depends on model/data size) | Hyperparameter fine-tuning for small leaderboard gains |
+| Sweep wide ranges (8 … 1024+ agents/bits) to see **shape of the curve** | Head-to-head STE vs Swarm for small improvements |
+| Ask *what encoding structure works* (exponent vs mantissa) | Exhaustive LayerNorm mode tables unless they change the representation story |
+
+Baselines from v0.1–v0.4 are **reference points** (“this family can learn”), not a competition to shave points.
+
 | Claim | In scope today |
 |-------|----------------|
 | No FP master weight for linear layers | Yes (v0.1–v0.4) |
 | Discrete optimizer update (flips / integer Δ) | Yes |
-| Bit-only backward / integer LayerNorm | **No** (autograd + LN math still FP) |
-| Trillion-param scale | **No** (MNIST ablations first) |
+| Representation laws for swarm width & encoding | **Next (main focus)** |
+| Bit-only backward / integer LayerNorm | **No** |
+| Trillion-param pretrain | **No** |
 
 Background notes: `docs/temp/research.md`, `docs/temp/deep-research-report.md`.
 
@@ -38,23 +52,22 @@ Background notes: `docs/temp/research.md`, `docs/temp/deep-research-report.md`.
 | **v0.3** | `experiments/v0_3/` | Binary register \(v\in[0,2^n-1]\) | **Carry-safe** adaptive ±Δv | **0.9589** | **0.9723** | **0.9745** |
 | **v0.4** | `experiments/v0_4/` | Balanced ternary, places \(3^i\) | Carry-safe adaptive ±Δs | **0.9551** | **0.9717** | **0.9737** |
 
-**Takeaways**
+**Takeaways (representation, not leaderboard)**
 
-1. **Carry-safe integer steps (v0.3)** are the large win over independent flips (v0.2).
-2. **Ternary (v0.4)** matches v0.3 accuracy with natural ~30% zero sparsity.
-3. LayerNorm modes: with place-value + carry-safe, LN helps; pure `none` is still strong.
-4. Half the agent budget (16 bits vs 32 unary) is enough once place-value is used.
+1. **How you encode and update** matters more than small protocol tweaks: carry-safe place-value (v0.3) beat independent flips (v0.2) by a clear margin.  
+2. Unary majority (v0.1) and fixed-width binary registers (v0.3) are **different representation families**—both can learn; they are not the same object as “swarm size.”  
+3. Ternary place-value (v0.4) is a third family; accuracy was similar to v0.3 on this toy, with natural zeros.  
+4. We only ever tried a **few widths** (e.g. S=32 unary, n=16 bits, 10 trits). We do **not** know the role of width at 8, 64, 128, 1024, …
 
-Numbers also logged in DuckDB `results/experiments.duckdb` (when store ingest ran).
+Numbers also in DuckDB `results/experiments.duckdb` when ingested.
 
 ### 2.2 Design decisions locked in
 
 | Decision | Choice |
 |----------|--------|
-| Dataset for optimizer science | **MNIST only** (CIFAR later) |
-| Agent storage | int8 buffers (semantic int; not `nn.Parameter` master \(W\)) |
-| Grad path | Float view + decode; Swarm updates discrete state |
-| LN ablations | `none` / `no_affine` / `affine` (affine = optional FP crutch) |
+| Dataset for early representation science | **MNIST first**; scale task later when laws appear |
+| Agent storage | Discrete buffers (semantic int; not FP master \(W\)) |
+| Grad path | Float view for pressure; discrete state for storage/update |
 | Naming | `experiments/v0_N/`, `results/v0_N/`, `checkpoints/v0_N/` |
 
 ### 2.3 Infrastructure (also done)
@@ -62,336 +75,277 @@ Numbers also logged in DuckDB `results/experiments.duckdb` (when store ingest ra
 | Item | Location |
 |------|----------|
 | Dataset download (local only; not CI) | `scripts/download_datasets.py` |
-| Gitignore for `data/`, checkpoints, results | `.gitignore` |
+| Gitignore for data / checkpoints / results | `.gitignore` |
 | DuckDB experiment store | `binary_optimizers/store/` |
-| Report scripts | `scripts/report.sh`, `scripts/report_ste_vs_swarm.sh` |
-| STE vs Swarm shared protocol | `experiments/ste_vs_swarm/` |
+| STE vs Swarm harness (optional later) | `experiments/ste_vs_swarm/` |
 | Unit tests | `experiments/v0_*/test_*.py`, `tests/test_store.py` |
 
-### 2.4 Incomplete / weak spots (plain language)
+### 2.4 Open gaps (re-prioritized)
 
-This section lists **gaps**: unfinished experiments or results that are **too weak to trust**
-for a scientific claim. It is not mainly “code is broken,” but “the story is incomplete.”
-
-#### Full STE vs Swarm comparison table (incomplete)
-
-**Goal.** Train several methods on the **same** small network, same MNIST data, and the
-same LayerNorm options, then compare fairly:
-
-| Method | Plain idea |
-|--------|------------|
-| **STE** | Keep floating-point weights; use only ±1 in the forward pass; update the float weights with SGD |
-| **Swarm v0.3** | No float “master” weight; store bits; update with carry-safe integer steps |
-| **Swarm v0.4** | Same idea with ternary values {-1, 0, +1} |
-
-LayerNorm is tested three ways (`none` / `no_affine` / `affine`), so a full comparison is a
-**grid** of method × LayerNorm mode.
-
-**Reality today.** The results database only has **one** STE run: STE + no LayerNorm, with
-test accuracy about **21%** (near chance for 10-class MNIST). That run almost certainly
-**failed** (bad learning rate, stopped early, or broken setup). It is **not** a valid STE
-baseline.
-
-**Why it matters.** Without a working STE baseline under the same rules, we cannot honestly
-say Swarm is better or worse than STE—only that Swarm variants improved among themselves
-(v0.1–v0.4).
-
-#### Multi-seed error bars (not run)
-
-Almost all numbers used a **single random seed** (42). Training is noisy: another seed can
-change accuracy by a few points. **Error bars** means train e.g. 3 seeds and report
-mean ± spread. Single-seed results are fine for development, weak for claims like
-“method A beats method B.”
-
-#### `n_bits` / `n_trits` trade-off curve (not run)
-
-We fixed **16 bits** (v0.3) and **10 ternary digits** (v0.4). We have **not** asked:
-*if we use fewer bits, how much accuracy do we lose?* That efficiency trade-off is unfinished.
-(See next-step **#3** below for the full explanation.)
-
-#### CIFAR / Transformer (not started)
-
-**MNIST** is a small, easy digit task—good for debugging optimizers. **CIFAR-10** (color
-photos) and **Transformers** (deeper language-style models) are harder. We have not shown
-Swarm still trains well beyond the tiny MNIST MLP.
-
-#### Packing bits for memory claims (only prototype)
-
-In research code, each agent is often stored as `int8` (8 bits of RAM) even though the value
-is only 0/1. **Packing** means storing eight binary agents in one byte (closer to 1 bit each)—
-needed for a serious “uses less memory than float training” claim. Accuracy treats weights as
-discrete, but **memory measurements still look like a lab prototype**, not a packed system.
-
-#### CI without large datasets (policy to keep enforcing)
-
-Automated tests on every commit should **not** download MNIST/CIFAR. Unit tests use tiny
-synthetic tensors; people download data locally with `scripts/download_datasets.py`. Keep CI
-from accidentally running full training that needs real data.
-
-| Item (short) | Status |
-|--------------|--------|
-| Full STE vs Swarm grid | Incomplete (only broken STE `ln_none` ~0.21) |
-| Multi-seed error bars | Not run (seed=42 only) |
-| bits/param vs accuracy curve | Not run |
-| CIFAR / Transformer | Not started |
-| Bit packing for memory claims | Prototype only |
-| CI without datasets | Policy agreed; keep enforcing |
+| Gap | Priority now |
+|-----|----------------|
+| **Laws of swarm / register width** (8 … 1024+) | **Primary** |
+| **Laws of exponential / float-like encoding** (exponent vs mantissa) | **Primary** |
+| Harder data (CIFAR, small LM) to stress those laws | After laws are sketched on MNIST |
+| STE head-to-head, multi-seed, hyperparameter polish | **Deferred** (not the research question) |
+| Bit packing for production memory claims | Later engineering |
+| CI without datasets | Keep enforcing |
 
 ---
 
-## 3. Architecture of the current “winner” (plain language)
+## 3. Architecture of the current reference stack (plain language)
 
-**Winner for next baselines: experiment v0.3** (carry-safe binary place-value Swarm).  
-v0.4 is the same network shape with **ternary** digits instead of binary bits.
+**Reference implementation: v0.3** (carry-safe binary place-value).  
+v0.4 = same network with ternary digits. Use these as **scaffolds** to vary width and encoding—not as final optima.
 
-### 3.1 What the network looks like
-
-We use a small **multi-layer perceptron** on MNIST (not a full BitNet LLM). Data flow:
+### 3.1 Network shape (fixed while studying representation)
 
 ```
-Input image (28×28)
-  → Flatten to 784 numbers
+Image 28×28 → Flatten (784)
   → [optional LayerNorm]
-  → CarrySafeLinear: 784 → 128   (first fully connected layer)
+  → DiscreteLinear: 784 → 128
   → ReLU
   → [optional LayerNorm]
-  → CarrySafeLinear: 128 → 10    (scores for digits 0–9)
-  → Cross-entropy loss
+  → DiscreteLinear: 128 → 10
 ```
 
-| Piece | Role in plain terms |
-|-------|---------------------|
-| **Flatten** | Turn the image into a vector of 784 pixel values |
-| **LayerNorm (optional)** | Rescale activations so training is more stable; three modes: off, normalize only, or normalize + small learnable scale/shift |
-| **CarrySafeLinear** | Our special linear layer: weights are **not** free floats; they are decoded from discrete bits |
-| **ReLU** | Standard “keep positive values” nonlinearity between the two layers |
-| **10 outputs** | One score per digit class |
+BitNet-inspired in spirit (low-bit linears, optional pre-norm). Not a large LLM.
 
-This is **BitNet-inspired** only in spirit (low-bit linear layers, optional pre-layer norm, no bias on those linears). It is **not** Microsoft’s large language model.
+### 3.2 Weight as a discrete register (v0.3)
 
-### 3.2 How one weight is stored (the discrete “register”)
+Each connection stores **n** bits \(b_i \in \{0,1\}\):
 
-For each connection from an input unit to an output unit we store **n bits**
-(default `n_bits = 16`), each bit \(b_i\) is only **0 or 1**.
+1. Integer \(v = \sum_i b_i 2^i\) in \(\{0,\ldots,2^n-1\}\).  
+2. Weight \(w = 2v/(2^n-1) - 1 \in [-1,1]\).
 
-1. Interpret the bits as a normal binary **integer**:
-   \[
-   v = b_0\cdot 2^0 + b_1\cdot 2^1 + \cdots + b_{n-1}\cdot 2^{n-1}
-   \]
-   so \(v\) is an integer from \(0\) to \(2^n - 1\) (for 16 bits: 0 … 65535).
+No separate FP master \(W\). Carry-safe update: change \(v\) by ±Δ, re-encode bits
+(carries exact). See older §3 writeup for full step-by-step if needed.
 
-2. Map that integer to a **weight** in roughly \([-1, +1]\):
-   \[
-   w = \frac{2v}{2^n - 1} - 1
-   \]
-   Small \(v\) → weight near \(-1\); large \(v\) → weight near \(+1\); middle → near \(0\).
+### 3.3 Two different meanings of “swarm size”
 
-So the “true” parameter is the **bit string** (or the integer \(v\)). The floating value \(w\)
-is only a **decoded** number used in the matrix multiply. There is **no separate full-precision
-master weight** that STE would keep updating forever.
+Do not confuse these—they answer different research questions:
 
-In code, bits may sit in an `int8` buffer for convenience; **semantically** they are still only
-0/1. Packing them tightly for memory is a later efficiency step (see §2.4).
+| Concept | Where it appeared | What the number means |
+|---------|-------------------|------------------------|
+| **Unary population size** \(S\) | v0.1 | How many equal-weight ±1 agents vote for one logical weight |
+| **Register width** \(n\) (bits / trits) | v0.2–v0.4 | How many **place-value digits** encode one weight |
 
-### 3.3 How a forward pass uses those weights
-
-For a layer \(y = W x\) (no bias):
-
-1. Decode every entry of \(W\) from its bits → \(w\) as above.  
-2. Multiply by a **fixed** scale \(1/\sqrt{\text{fan-in}}\) so signals do not explode
-   (standard practice for binary/low-bit nets; this scale is **not** a learned float weight matrix).  
-3. Compute the usual linear map with those \(w\) values.
-
-Gradients for training are obtained by treating the decode as differentiable for a moment
-(autograd on a float view of the bits). That is only to get a **direction and strength of
-pressure** on each weight. The **stored** state is still updated discretely (next subsection).
-
-### 3.4 How the optimizer updates (carry-safe Swarm)
-
-Classic float training: \(w \leftarrow w - \text{learning rate}\times\text{gradient}\).
-
-v0.3 instead:
-
-1. From the batch, get a gradient signal for each decoded weight \(w\)
-   (how much the loss wants \(w\) to go up or down).  
-2. Smooth that signal over batches with an **exponential moving average** (EMA)—like a short
-   memory so one noisy batch does not thrash the bits.  
-3. With a probability that grows with the size of that pressure, change the **integer** \(v\):
-   - If the loss wants a smaller \(w\), decrease \(v\).  
-   - If it wants a larger \(w\), increase \(v\).  
-   - The step size \(\Delta v\) is **adaptive** (small pressure → small step; large → up to a cap).  
-4. **Write bits back from the new integer** (standard binary encoding).  
-   Any “carry” (e.g. 0111 → 1000 when adding one) is handled automatically by integer arithmetic.
-   That is what **carry-safe** means: we do **not** flip unrelated bits independently and hope
-   the place values still make sense.
-
-After every step, bits remain only in \(\{0,1\}\).
-
-### 3.5 LayerNorm modes (the three ablations)
-
-| Mode | Meaning |
-|------|---------|
-| `none` | No LayerNorm—purest discrete-weight story |
-| `no_affine` | LayerNorm normalizes mean/variance only; **no** extra learnable float scale/shift |
-| `affine` | Full LayerNorm with small learnable scale and shift, trained with ordinary SGD |
-
-In the best MNIST runs, `affine` and `no_affine` scored highest, but `none` still did well (~96%).
-The optional LN parameters are the only “normal” float parameters in the affine case; the
-**linear weights** stay discrete.
-
-### 3.6 What v0.4 changes (ternary twin)
-
-Same network shape. Instead of bits in \(\{0,1\}\) with place values \(2^i\):
-
-- Digits in \(\{-1, 0, +1\}\)  
-- Place values \(3^i\) (balanced ternary)  
-- Same idea: form an integer, decode to \(w \in [-1,1]\), update with carry-safe integer steps  
-
-Many digits can be **zero**, so weights are naturally sparse (~30% zeros in our runs).
-Accuracy on MNIST was essentially the same as v0.3.
-
-### 3.7 Why this is the “winner”
-
-Among v0.1–v0.4, **v0.3** gave the best balance of:
-
-- high MNIST accuracy,  
-- clear discrete storage,  
-- updates that respect place value (unlike independent bit flips in v0.2),  
-- a simple story for the next baseline comparisons (vs STE, vs bit budget sweeps).
-
-**Default for new experiments:** use **v0.3** unless the question is specifically about ternary
-(v0.4) or about older ablations (v0.1/v0.2).
+Both are “how much discrete state per connection.”  
+**Question 1 below** covers both families and asks whether a shared law exists.
 
 ---
 
-## 4. Proposed next steps
+## 4. Core research program (big picture)
 
-Ordered for **learning rate of research**, not paper length.
+### 4.1 Question A — Swarm / register size: what does width buy?
 
-### P0 — Close the comparison (short)
+**Plain question.** For each connection we store a **batch of discrete units**
+(agents or bits). How large should that batch be—8, 16, 32, 64, 128, 1024, more?
 
-1. **Finish `ste_vs_swarm`** under the shared protocol  
-   - Run `ste_sgd` × all LN modes with working hyperparameters (current `ln_none` ~20% is not a valid STE baseline).  
-   - Run `swarm_v0_3` / `swarm_v0_4` through the same harness into DuckDB.  
-   - Produce one report table: method × LN × best test × wall time.  
-2. **Multi-seed (3 seeds)** for v0.3 `none` + `affine` and STE at best LN — error bars for claims.
+**Why it might matter**
 
-**Exit:** one markdown table proving Swarm vs STE under matched architecture.
+| Small width | Large width |
+|-------------|-------------|
+| Few distinct weight levels; coarse steps | Many levels; fine steps and large dynamic range |
+| Cheap memory and updates | Expensive per connection |
+| May underfit or oscillate | May over-parameterize the *representation* (not the network topology) |
 
-### P1 — Efficiency science (medium)
+This is **not** the same as “wider network” (more neurons). It is **more bits of state per edge**.
 
-#### 3. Pareto: bits per parameter vs accuracy (plain language)
+**Hypotheses (to test, not assume)**
 
-**Question.** If we store **fewer bits for each weight**, how good does the model stay?
+1. **Fixed sweet spot** — e.g. “around 16–32 always works on MNIST-like nets.”  
+2. **Saturation** — accuracy rises with width then flattens; extra bits waste.  
+3. **Scaling-law style** — optimum width grows with model size, data size, or depth
+   (analogous to “more data ↔ more parameters” in neural scaling):
+   - larger nets / harder tasks may need **more** bits per weight for fine updates;  
+   - or the opposite: large nets tolerate **coarser** weights (redundancy).  
+4. **Family-dependent** — unary \(S\) and place-value \(n\) have different curves;
+   only one family has a simple law.
 
-Today we only know that **16 bits** (v0.3) and **10 ternary digits** (v0.4) work well. We do
-**not** know the cheapest setting that still works.
+**Experimental skeleton (representation science, not tuning)**
 
-**What “bits per parameter” means.** A *parameter* here is one connection (one entry of a weight
-matrix). Spending 16 bits per connection is twice as expensive as 8 bits per connection, even if
-the network has the same number of connections. Plotting **bits per weight** (not only total
-model size) isolates coding cost from “we just made the network wider.”
+- Fix: architecture family, data, train recipe defaults (do not grid-search lr for each width).  
+- Vary **only** width on a log grid: e.g. \(8, 16, 32, 64, 128, 256, 512, 1024\)
+  (and optionally 4 if cheap).  
+- Families at least:
+  - **Unary Swarm** (v0.1-style majority / sum), width = \(S\);  
+  - **Carry-safe binary register** (v0.3), width = \(n_{\mathrm{bits}}\);  
+  - Optionally **ternary register** (v0.4), width = \(n_{\mathrm{trits}}\).  
+- Metrics: final / best accuracy, train dynamics (does it plateau or stall),
+  update activity (how often high vs low digits move), effective use of range
+  (do weights sit at extremes only?).  
+- **Scaling axis (phase 2 of the same question):** repeat 2–3 widths on a
+  **larger** model and/or harder data (deeper MLP, CIFAR) and see if the
+  preferred width **moves** systematically.
 
-**What “Pareto” means here.** A simple trade-off plot:
+**What “optimum” would mean**
 
-- **X-axis:** cost — bits spent per weight (or total agent bits)  
-- **Y-axis:** quality — test accuracy on MNIST  
+- Not “best hyperparameter on one plot,” but either:  
+  - a **stable plateau** (“≥32 bits adds little on this task”), or  
+  - a **rule** (“preferred \(n\) scales like \(\log(\#params)\) or with depth”),  
+  - or evidence that **no universal constant** exists—only trade-offs.
 
-Train several settings and plot one point each:
+**Success for Question A:** a clear picture of accuracy vs width for ≥2 representation
+families, plus a first statement on whether the curve is task/model-dependent.
 
-| Family | Settings to try |
-|--------|-----------------|
-| v0.3 | `n_bits` ∈ {4, 8, 12, 16, 24} |
-| v0.4 | `n_trits` ∈ {4, 6, 8, 10, 12} |
+---
 
-Connecting the points shows the **frontier**: for a given bit budget, what accuracy you get.
-Optionally mark v0.1 (32 unary agents per weight) on the same figure for comparison.
+### 4.2 Question B — Exponential / float-like encoding: exponent vs mantissa
 
-**What we would learn**
+**Plain question.** Real floating-point numbers split bits into **sign**, **exponent**
+(order of magnitude), and **mantissa** (fine detail). Our discrete weight should
+imitate a useful range of magnitudes. **How should we split the discrete budget?**
 
-- Is 8 bits enough for high MNIST accuracy, or do we need 16?  
-- Does ternary with fewer digits beat binary at the **same bit budget**?  
-- Does the method still look attractive if the competitor is “8-bit Adam + float weights,” not only raw accuracy?
+Today v0.2–v0.3 mostly use **uniform place value** (pure binary integer / \(2^i\)),
+which is like a fixed-point number, **not** a full float. v0.4 is base-3 fixed-point-like.
+We have **not** systematically designed true **exponent + mantissa** swarms.
 
-**How to run (conceptually)**
+**Encoding families to compare (big-picture methods, not micro-tweaks)**
 
-1. Fix network size, data, and (ideally) several seeds.  
-2. Vary **only** `n_bits` or `n_trits`.  
-3. Train to early stopping.  
-4. Plot accuracy vs bits per weight.
+| Encoding | Idea |
+|----------|------|
+| **Fixed-point / pure place-value** | All digits are mantissa-like; \(w \propto \sum d_i \beta^i\) (current v0.3/v0.4) |
+| **Biased exponent + mantissa** | Some digits choose a scale \(2^e\) or \(3^e\); others fill significand |
+| **Shared block scale** | One scale per row/block (microscaling-style), digits only for local shape |
+| **Log-domain / multiplicative** | Digits update multiplicative factors (closer to LNS); different update rule |
+| **Unary vs place-value vs float-split** | Same total bit budget, different structure |
 
-#### 4. Memory accounting
+**Sub-question: which bits are exponent, which are mantissa?**
 
-- Report true storage if packed (1 bit per binary agent; ternary is denser but not a power of two)
-  vs the current `int8` research prototype.  
-- Optional: pack/unpack in checkpoints without changing training math.
+For a fixed budget \(n\) bits, try allocations such as:
 
-**Exit (P1):** a curve showing where carry-safe Swarm wins or loses on a bits-per-parameter story
-(not only on accuracy).
+| Exponent bits \(n_e\) | Mantissa bits \(n_m\) | Intuition |
+|----------------------|----------------------|-----------|
+| 0 | \(n\) | Pure fixed-point (status quo v0.3) |
+| 2–4 | \(n - n_e\) | Small dynamic range control |
+| \(n/2\) | \(n/2\) | Balanced split |
+| large \(n_e\), tiny \(n_m\) | Coarse scales, little fine detail |
 
-### P2 — Harder tasks (medium–long)
+Example decode (conceptual, one design among many):
 
-5. **CIFAR-10** small BitNet-style CNN or MLP-mixer toy with **v0.3** (and STE control).  
-6. **Tiny LM** (e.g. nanoGPT-scale BitLinear + carry-safe Swarm on char/token LM) — only after CIFAR is stable.
+\[
+w = (-1)^{s}\,\cdot\, 2^{e - e_{\mathrm{bias}}}\,\cdot\,(1 + m/M)
+\]
 
-**Exit:** not SOTA; prove training doesn’t die at depth / non-MNIST.
+with \(s,e,m\) packed from the swarm digits. **Many designs are valid**—the research
+is which **class** works for learning under discrete carry-safe (or Swarm) updates,
+not which lr wins.
 
-### P3 — Algorithm polish (parallel tracks)
+**Hypotheses**
 
-7. **v0.5 candidates** (pick one primary):  
-   - **A.** Hybrid: carry-safe register + population voting only on residual/error.  
-   - **B.** Hardware-friendly: bit-serial update kernels / popcount metrics.  
-   - **C.** Stronger STE baseline (Adam on latent BitLinear, same topology) for fairer bar.  
-8. Theory note: expected Δ vs SGD step; when carry-safe ≈ quantized SGD.
+1. **Fixed-point is enough** for MNIST-scale nets; float split only helps harder tasks.  
+2. **A few exponent bits** unlock training (avoid vanishing small updates / stuck scales)
+   without needing huge total \(n\).  
+3. **Optimum split moves** with width \(n\) (e.g. exponent grows slowly, like
+   \(\lceil\log_2 \log_2 n\rceil\) or stays constant).  
+4. **Block scales** beat per-weight exponents (cheaper, closer to real low-bit LLM practice).
+
+**Experimental skeleton**
+
+- Fix total budget \(n \in \{16, 32, 64\}\) first (link to Question A).  
+- For each \(n\), sweep **structures** (not tiny hyperparams): pure fixed-point vs
+  several exponent/mantissa splits vs one block-scale baseline.  
+- Same train defaults; measure accuracy **and** whether weights use many scales
+  (histogram of exponents / magnitudes).  
+- Later: same encodings on larger models / CIFAR to see if the best structure **moves**.
+
+**Success for Question B:** a ranking of **encoding classes**, a recommended default
+split rule (or “depends on \(n\) as follows…”), and evidence whether float-like
+structure is necessary for the Swarm idea or optional.
+
+---
+
+### 4.3 How A and B interact (the real “scaling” picture)
+
+| | Narrow register | Wide register |
+|--|-----------------|---------------|
+| **Fixed-point** | Coarse grid | Fine grid, limited dynamic range unless \(n\) is large |
+| **Exponent + mantissa** | Few scales, coarse detail | Both range and detail—but need a good split |
+
+Research products we want (analogous to scaling-law *statements*, not just tables):
+
+1. **Width law:** accuracy vs \(S\) or \(n\); plateau or dependence on model/data size.  
+2. **Structure law:** given \(n\), how to allocate exponent vs mantissa (or “use fixed-point”).  
+3. **Joint rule (stretch goal):** e.g. “total bits grow slowly with depth; exponent bits stay ~3–5.”
+
+Until those exist, “optimum is 16” or “optimum is 1024” would be **guesses** for one toy net.
+
+---
+
+## 5. Proposed work packages (ordered)
+
+### WP1 — Width atlas (Question A)  ← start here
+
+| ID | Content |
+|----|---------|
+| `v0_5_width_unary` | Unary Swarm, \(S \in \{8,16,32,64,128,256,512,1024\}\) (as far as compute allows) |
+| `v0_5_width_register` | v0.3 carry-safe, \(n_{\mathrm{bits}}\) on the same grid |
+| Optional | v0.4 width grid for ternary |
+
+**Protocol spirit:** one network size, one data regime, default train settings; vary width only.  
+**Deliverable:** curves + short note: plateau? peak? blow-up at large \(S\)?
+
+### WP2 — Encoding atlas (Question B)
+
+| ID | Content |
+|----|---------|
+| `v0_6_encoding` | Fixed total \(n\); compare fixed-point vs exp/mantissa splits vs block scale |
+
+**Deliverable:** which encoding class works; default split rule for the Swarm idea.
+
+### WP3 — Do the optima move? (scaling-style)
+
+Repeat a **sparse** subset of WP1/WP2 on:
+
+- deeper / wider MLP, and/or  
+- CIFAR-scale vision toy  
+
+Ask: does preferred width or preferred exp/mant split **shift** with scale?
 
 ### Explicitly deferred
 
-- Full BitNet 2B / LLM pretrain.  
-- Pure integer backward.  
-- Integer LayerNorm redesign.  
-- Committing MNIST/CIFAR blobs (keep `scripts/download_datasets.py`).
+- Multi-seed statistics for tiny gaps  
+- STE vs Swarm scoreboard optimization  
+- Hyperparameter grids (lr, momentum, recruit_rate) except when a representation is **broken** without a minimal fix  
+- Full LLM pretrain, pure integer backward, committing dataset blobs  
 
 ---
 
-## 5. Suggested experiment IDs
+## 6. Suggested experiment IDs
 
 | ID | Focus |
 |----|--------|
-| `ste_vs_swarm` (finish) | P0 comparison |
-| `v0_3_bitsweep` | P1 n_bits Pareto |
-| `v0_4_tritsweep` | P1 n_trits Pareto |
-| `v0_5_cifar` or `v0_5_*` | P2 / P3 chosen track |
+| `v0_5_width_unary` | Question A, unary family |
+| `v0_5_width_register` | Question A, carry-safe binary |
+| `v0_6_encoding` | Question B, exp vs mantissa structures |
+| `v0_7_scale_shift` | Do optima move with model/data size? |
 
-Keep PROTOCOLS under `experiments/<id>/PROTOCOL.md` and log to DuckDB when using the store.
-
----
-
-## 6. Recommended immediate action
-
-1. Stay on (or merge) roadmap docs from branch **`plan/swarm-roadmap`**.  
-2. Open implementation branch **`feat/ste-vs-swarm-complete`** (or continue `experiments/ste_vs_swarm`):  
-   - Fix STE hyperparameters until MNIST STE ≥ ~97% under shared MLP+LN protocol (or document ceiling).  
-   - Fill full method × LN matrix into DuckDB.  
-3. Then **`feat/v0_3-bitsweep`** for the efficiency plot.
-
-**Default “product” of the ladder today:** treat **v0.3 carry-safe** as the binary Swarm baseline; **v0.4** as the ternary twin.
+PROTOCOLS under `experiments/<id>/PROTOCOL.md`; log to DuckDB when useful.
 
 ---
 
-## 7. How to re-run
+## 7. Recommended immediate action
+
+1. Keep roadmap on **`plan/swarm-roadmap`** (this document).  
+2. Implement **`v0_5_width_register`** first (v0.3 scaffold, width grid including large \(n\)
+   as far as memory allows)—answers “is 16 special or just what we tried?”  
+3. Parallel or next: **`v0_5_width_unary`** so unary \(S\) and register \(n\) are not mixed.  
+4. Then **`v0_6_encoding`** with fixed total bit budget and several exp/mantissa designs.  
+5. Only after curves exist: sparse scaling check (deeper net / CIFAR).
+
+**Default scaffold:** v0.3 carry-safe for register experiments; v0.1-style for pure swarm population size; v0.4 when ternary structure is the object of study.
+
+---
+
+## 8. How to re-run existing references
 
 ```bash
-# Local data (not for CI)
 uv sync --extra bench
 python scripts/download_datasets.py --mnist --no-cifar
 
-# Ladder experiments
-python experiments/v0_3/train.py --ln-mode all
-python experiments/v0_4/train.py --ln-mode all
-
-# Comparison (when harness is fully green)
-python experiments/ste_vs_swarm/train.py
-./scripts/report_ste_vs_swarm.sh
+python experiments/v0_3/train.py --ln-mode none   # reference register
+python experiments/v0_1/train.py --ln-mode none   # reference unary (if CLI matches)
 ```
 
 Unit tests / CI: `pytest experiments/v0_*/test_*.py tests/` — **no** dataset download.
