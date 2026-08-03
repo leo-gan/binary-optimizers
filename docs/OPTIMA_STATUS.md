@@ -61,3 +61,31 @@ rank classes at healthy budgets.
 
 Expand only for polish (register densify, n=32 rescue) or pure-wall re-runs of
 winners under `*_1` ids—not to “find” a missing peak.
+
+---
+
+## Pure-wall re-run of winners (`pure_wall_budget_v1`, seed 42)
+
+Budget: `max_wall_sec=1200`, wall patience=150 s, no epoch early-stop.
+
+| Cell | Legacy best | Pure-wall best | Δ | Pure-wall wall / epochs | Stop |
+|------|------------:|---------------:|--:|-------------------------|------|
+| Register n=8 (`v0_5_1_width_register`) | 0.9633 | **0.9641** | +0.0008 | 545 s / 65 ep (best@48) | patience_wall |
+| Encoding fixed@8 (`v0_6_1_encoding`) | 0.9633 | **0.9641** | +0.0008 | 485 s / 71 ep (best@48) | patience_wall |
+| Unary S=256 (`v0_5_1` / `v0_6_1`) | 0.9617 / 0.9582 | 0.9553 | −0.006 / −0.003 | ~700–800 s / **6 ep** (best@4) | patience_wall |
+
+### Takeaways
+
+1. **Fixed-point / register n=8** is stable under pure wall; slightly better than
+   legacy (more epochs allowed before 150 s stall ≈ 20+ short epochs).  
+2. **Unary S=256 under 150 s wall patience is harsh:** one epoch ≈ 110 s, so stall
+   fires after **~1–2 non-improving epochs**. Legacy epoch patience (10) ran ~26
+   epochs and reached higher best. Pure wall is fairer *across* cells but **tight
+   for slow epochs** if patience is a fixed fraction of wall.  
+3. Ranking under pure wall still has **fixed_n8 > unary_S256** (0.964 vs 0.955),
+   same order as legacy.
+
+### Optional follow-up (not run)
+
+- Unary-only: `--patience-frac 0.25` (300 s stall ≈ 2–3 unary epochs) or longer
+  `--max-wall-sec` for polish without changing the pure-wall *principle*.
