@@ -1,8 +1,11 @@
 # Experiment v0.5 — Width atlas: **unary** Swarm population size
 
-**Path:** `experiments/v0_5_width_unary/` · **Results:** `results/v0_5_width_unary/`  
+**Path:** `experiments/v0_5_width_unary/`  
+**Run / DB id:** `v0_5_1_width_unary` (parent `v0_5_width_unary`; wall-budget protocol)  
+**Results:** `results/v0_5_1_width_unary/`  
 **Scaffold:** v0.1 unary majority Swarm (`experiments/v0_1/`)  
-**Plan:** Question A — population size \(S\) per weight (not mixed with register \(n\)).
+**Plan:** Question A — population size \(S\) per weight (not mixed with register \(n\)).  
+See `docs/EXPERIMENT_VERSIONS.md`.
 
 ## Claim
 
@@ -23,7 +26,9 @@ majority / STE through normalized sum.
 | `hidden` | 128 |
 | `ln_mode` | default `none` |
 | Width grid | \(S \in \{8,16,32,64,128,256,512,1024\}\) (skip if OOM) |
-| epochs / patience | 80 / **5** (early stop; atlas ranking, not polish) |
+| Budget | max_epochs=80 **and** max_wall_sec=1200 (fair wall clock across \(S\)) |
+| Patience | patience_frac=0.125 of both budgets (~10 ep / 150s without gain) |
+| min_delta | 0 (any strict test gain) |
 | seed | 42 |
 | Optimizer | v0.1 defaults (`recruit_rate=1e4`, …) |
 

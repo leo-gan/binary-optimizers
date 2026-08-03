@@ -19,6 +19,12 @@ sys.path.insert(0, str(_REPO_ROOT))
 sys.path.insert(0, str(_THIS_DIR))
 
 from binary_optimizers.data.mnist import make_mnist_loaders
+from binary_optimizers.store import db_notes, enrich_config, soft_record_completed_run
+from binary_optimizers.training.budget import (
+    EarlyStopTracker,
+    add_budget_args,
+    budget_from_args,
+)
 from binary_optimizers.training.loops import set_seed
 
 from metrics import swarm_stats
@@ -26,6 +32,9 @@ from model import BitNetCarrySafeMLP, LNMode
 from optimizer import SwarmOptimizerV03
 
 LN_MODES: tuple[LNMode, ...] = ("none", "no_affine", "affine")
+
+# Protocol rev (parent v0_3). See docs/EXPERIMENT_VERSIONS.md
+EXPERIMENT_ID = "v0_3_1"
 
 
 @torch.no_grad()
@@ -82,15 +91,15 @@ def train_one_mode(**kw) -> Dict[str, Any]:
         ln_lr=kw["ln_lr"],
     )
     history = []
-    best_test, best_epoch, stalled = -1.0, 0, 0
     best_state = None
+    budget = kw["budget"]
+    tracker = EarlyStopTracker(budget)
     print(
         f"\n===== v0_3 | ln_mode={ln_mode} | n_bits={kw['n_bits']} | "
         f"seed={kw['seed']} =====",
         flush=True,
     )
-    t0_run = time.time()
-    for epoch in range(1, kw["epochs"] + 1):
+    for epoch in range(1, budget.max_epochs + 1):
         t0 = time.time()
         tr_acc, tr_loss, flip = train_one_epoch(
             model, opt, kw["train_loader"], kw["device"]
@@ -110,27 +119,24 @@ def train_one_mode(**kw) -> Dict[str, Any]:
             "epoch_sec": time.time() - t0,
         }
         history.append(row)
-        if te_acc > best_test + kw["min_delta"]:
-            best_test, best_epoch, stalled = te_acc, epoch, 0
+        decision = tracker.observe(epoch, te_acc)
+        if decision.improved:
             best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
-        else:
-            stalled += 1
         print(
-            f"epoch {epoch:03d}/{kw['epochs']} | train={tr_acc:.4f} loss={tr_loss:.4f} | "
+            f"epoch {epoch:03d}/{budget.max_epochs} | train={tr_acc:.4f} loss={tr_loss:.4f} | "
             f"test={te_acc:.4f} loss={te_loss:.4f} | flip={flip:.4f} step={opt.last_step_frac:.4f} "
-            f"|g|={opt.last_grad_abs_mean:.3e} | best={best_test:.4f}@{best_epoch} "
-            f"stall={stalled}/{kw['patience']} | {row['epoch_sec']:.1f}s",
+            f"|g|={opt.last_grad_abs_mean:.3e} | {tracker.status_str()} | {row['epoch_sec']:.1f}s",
             flush=True,
         )
-        if stalled >= kw["patience"]:
-            print("Early stop.", flush=True)
+        if decision.stop:
+            print(f"Stop: {decision.reason}", flush=True)
             break
     if best_state is not None:
         model.load_state_dict(best_state)
         model.to(kw["device"])
     final_acc, final_loss = evaluate(model, kw["test_loader"], kw["device"])
     out = {
-        "experiment": "v0_3",
+        "experiment": EXPERIMENT_ID,
         "coding": "carry_safe_integer",
         "ln_mode": ln_mode,
         "seed": kw["seed"],
@@ -142,11 +148,13 @@ def train_one_mode(**kw) -> Dict[str, Any]:
         "activation": kw["activation"],
         "device": kw["device"],
         "epochs_ran": len(history),
-        "best_test_acc": best_test,
-        "best_epoch": best_epoch,
+        "budget": budget.to_dict(),
+        "stop_meta": tracker.meta_dict(),
+        "best_test_acc": tracker.best,
+        "best_epoch": tracker.best_epoch,
         "final_test_acc": final_acc,
         "final_test_loss": final_loss,
-        "wall_sec": time.time() - t0_run,
+        "wall_sec": tracker.wall_sec,
         "history": history,
         "baseline_v0_2_none": 0.9289,
         "baseline_v0_2_best": 0.9365,
@@ -157,21 +165,49 @@ def train_one_mode(**kw) -> Dict[str, Any]:
     jp = rd / f"ln_{ln_mode}_seed{kw['seed']}.json"
     with open(jp, "w") as f:
         json.dump(out, f, indent=2)
-    ck = _REPO_ROOT / "checkpoints" / "v0_3"
+    ck = _REPO_ROOT / "checkpoints" / EXPERIMENT_ID
     ck.mkdir(parents=True, exist_ok=True)
     cp = ck / f"ln_{ln_mode}_seed{kw['seed']}.pt"
     torch.save({"model_state": model.state_dict(), "meta": {k: v for k, v in out.items() if k != "history"}}, cp)
     out["json_path"] = str(jp)
     print(f"Saved {jp}", flush=True)
+    cfg = enrich_config(
+        EXPERIMENT_ID,
+        {
+            "ln_mode": ln_mode,
+            "hidden": kw["hidden"],
+            "n_bits": kw["n_bits"],
+            "recruit_rate": kw["recruit_rate"],
+            "max_step": kw["max_step"],
+            "step_scale": kw["step_scale"],
+            "budget": budget.to_dict(),
+        },
+    )
+    rid = soft_record_completed_run(
+        experiment=EXPERIMENT_ID,
+        name=f"ln_{ln_mode}",
+        config=cfg,
+        history=history,
+        seed=kw["seed"],
+        wall_sec=out["wall_sec"],
+        best_test_acc=out["best_test_acc"],
+        best_epoch=out["best_epoch"],
+        final_test_acc=out["final_test_acc"],
+        final_test_loss=out["final_test_loss"],
+        summary={"epochs_ran": out["epochs_ran"], "source_json": str(jp)},
+        checkpoint_path=cp,
+        notes=db_notes(EXPERIMENT_ID),
+    )
+    if rid:
+        out["run_id"] = rid
+        print(f"Stored run_id={rid} experiment={EXPERIMENT_ID}", flush=True)
     return out
 
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--ln-mode", choices=["all", *LN_MODES], default="all")
-    p.add_argument("--epochs", type=int, default=80)
-    p.add_argument("--patience", type=int, default=10)
-    p.add_argument("--min-delta", type=float, default=5e-4)
+    add_budget_args(p)
     p.add_argument("--hidden", type=int, default=128)
     p.add_argument("--n-bits", type=int, default=16)
     p.add_argument("--recruit-rate", type=float, default=1e4)
@@ -189,18 +225,17 @@ def main():
     args = p.parse_args()
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     data_root = args.data_root or str(_REPO_ROOT / "data")
-    results_dir = Path(args.results_dir or (_REPO_ROOT / "results" / "v0_3"))
+    results_dir = Path(args.results_dir or (_REPO_ROOT / "results" / EXPERIMENT_ID))
     train_loader, test_loader = make_mnist_loaders(
         root=data_root, batch_size_train=args.batch_size, batch_size_test=1000, num_workers=0
     )
     modes = list(LN_MODES) if args.ln_mode == "all" else [args.ln_mode]
+    budget = budget_from_args(args)
     summaries = []
     for mode in modes:
         r = train_one_mode(
             ln_mode=mode,
-            epochs=args.epochs,
-            patience=args.patience,
-            min_delta=args.min_delta,
+            budget=budget,
             hidden=args.hidden,
             n_bits=args.n_bits,
             recruit_rate=args.recruit_rate,
@@ -228,7 +263,7 @@ def main():
     sp = results_dir / f"summary_seed{args.seed}.json"
     results_dir.mkdir(parents=True, exist_ok=True)
     with open(sp, "w") as f:
-        json.dump({"experiment": "v0_3", "seed": args.seed, "runs": summaries}, f, indent=2)
+        json.dump({"experiment": EXPERIMENT_ID, "seed": args.seed, "runs": summaries}, f, indent=2)
     print("\n===== v0_3 summary =====", flush=True)
     for s in summaries:
         print(
