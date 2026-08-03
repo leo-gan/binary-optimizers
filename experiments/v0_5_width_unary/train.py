@@ -193,7 +193,12 @@ def main() -> None:
     )
     p.add_argument("--ln-mode", type=str, default="none")
     p.add_argument("--epochs", type=int, default=80)
-    p.add_argument("--patience", type=int, default=10)
+    p.add_argument(
+        "--patience",
+        type=int,
+        default=5,
+        help="Early-stop patience (atlas default 5: rank widths fast; use 10 for polish)",
+    )
     p.add_argument("--min-delta", type=float, default=5e-4)
     p.add_argument("--hidden", type=int, default=128)
     p.add_argument("--seed", type=int, default=42)

@@ -1,12 +1,13 @@
 # Swarm / latent-free training — roadmap
 
-**Branch:** `plan/swarm-roadmap`  
-**Last updated:** 2026-07-31 (Coding column explained for v0.1–v0.4)  
-**Status:** v0.1–v0.4 complete as *existence proofs*; next work is representation science, not tuning
+**Living plan** (originated on `plan/swarm-roadmap`; updated on feature branches as work lands)  
+**Last updated:** 2026-08-02 (WP1 width-atlas results; WP2 budgets revised)  
+**Status:** v0.1–v0.4 existence proofs; **WP1 width atlas done** (sketch laws on MNIST MLP);
+**next = WP2 encoding atlas** (`v0_6_encoding`)
 
 This document is the living plan for latent-free binary/ternary Swarm optimizers
 (BitNet-inspired layers, no FP master weights). Experiment folders use semantic
-minor versioning: `experiments/v0_N/`.
+minor versioning: `experiments/v0_N/` or `experiments/v0_N_<topic>/`.
 
 **Terminology (preferred):** use **weight** for one entry of a weight matrix (one
 learnable link between two units). Do **not** use “connection” for that idea.
@@ -27,10 +28,10 @@ We are exploring the **whole idea** of Swarm representations—not polishing a r
 
 | Do now | Do **not** prioritize now |
 |--------|---------------------------|
-| Change **how weights are represented** (size of swarm / register, exponential coding) | Multi-seed error bars for ±0.5% claims |
+| Change **how weights are represented** (encoding structure next; width sketch done) | Multi-seed error bars for ±0.5% claims |
 | Look for **generic rules** (like scaling laws: how optimum depends on model/data size) | Hyperparameter fine-tuning for small leaderboard gains |
-| Sweep wide ranges (8 … 1024+ agents/bits) to see **shape of the curve** | Head-to-head STE vs Swarm for small improvements |
-| Ask *what encoding structure works* (exponent vs mantissa) | Exhaustive LayerNorm mode tables unless they change the representation story |
+| Ask *what encoding structure works* (exponent vs mantissa) at WP1 budgets | Re-sweep every \(S\)/\(n\) or head-to-head STE for small gains |
+| Sparse scaling checks **after** encoding sketch | Exhaustive LayerNorm mode tables unless they change the representation story |
 
 Baselines from v0.1–v0.4 are **reference points** (“this family can learn”), not a competition to shave points.
 
@@ -38,7 +39,7 @@ Baselines from v0.1–v0.4 are **reference points** (“this family can learn”
 |-------|----------------|
 | No FP master weight for linear layers | Yes (v0.1–v0.4) |
 | Discrete optimizer update (flips / integer Δ) | Yes |
-| Representation laws for swarm width & encoding | **Next (main focus)** |
+| Representation laws for swarm width & encoding | Width sketch **done** (WP1); encoding **next** (WP2) |
 | Bit-only backward / integer LayerNorm | **No** |
 | Trillion-param pretrain | **No** |
 
@@ -212,12 +213,23 @@ real weight in \([-1,1]\).”
 
 | Gap | Priority now |
 |-----|----------------|
-| **Laws of swarm / register width** (8 … 1024+) | **Primary** |
-| **Laws of exponential / float-like encoding** (exponent vs mantissa) | **Primary** |
-| Harder data (CIFAR, small LM) to stress those laws | After laws are sketched on MNIST |
+| **Laws of swarm / register width** (WP1) | **Sketch done** on MNIST MLP — see §5 WP1 results |
+| **Laws of exponential / float-like encoding** (exponent vs mantissa) | **Primary (WP2)** |
+| Harder data / larger nets to see if optima **move** (WP3) | After WP2 sketch on MNIST |
 | STE head-to-head, multi-seed, hyperparameter polish | **Deferred** (not the research question) |
 | Bit packing for production memory claims | Later engineering |
 | CI without datasets | Keep enforcing |
+
+**WP1 sketch (seed 42, hidden=128, `ln_mode=none`; details in
+`experiments/v0_5_NOTES.md`):**
+
+| Family | Shape | Practical optimum (this net) |
+|--------|-------|------------------------------|
+| **Register** \(n_{\mathrm{bits}}\) | Unimodal: rise 1→8, peak ~8, slight drop at 16, **cliff** ≥32 (~0.89) | **\(n \approx 8\)** (band ~6–16) |
+| **Unary** \(S\) | Strong gains 8→128, then **soft plateau** | **\(S \approx 256\)–1024** (diminishing; 256 is the cheap pick) |
+
+**Implication:** unary \(S\) and register \(n\) are **not interchangeable** axes.
+Do not assume “optimum is 16” or “bigger always better.”
 
 ---
 
@@ -318,6 +330,10 @@ This is **not** the same as “wider network” (more neurons → more weights).
 **Success for Question A:** a clear picture of accuracy vs width for ≥2 representation
 families, plus a first statement on whether the curve is task/model-dependent.
 
+**Status (WP1, MNIST MLP sketch):** met for one net/seed. Register peak **\(n\approx 8\)**;
+unary saturates **\(S\approx 256\)–1024**; families **differ**. Whether the peak **moves**
+with model/data size is WP3, not closed.
+
 ---
 
 ### 4.2 Question B — Exponential / float-like encoding: exponent vs mantissa
@@ -330,6 +346,19 @@ Today v0.2–v0.3 mostly use **uniform place value** (pure binary integer / \(2^
 which is like a fixed-point number, **not** a full float. v0.4 is base-3 fixed-point-like.
 We have **not** systematically designed true **exponent + mantissa** swarms.
 
+**Scaffold (important):** encoding structure is defined on **place-value / register**
+digits (v0.3 lineage)—bits you can re-label as exponent vs mantissa. **Unary**
+majority has no natural exp/mant split; it is a **baseline**, not the encoding
+scaffold. Do **not** run two parallel full encoding atlases (one unary, one register).
+
+**How WP1 optima feed WP2**
+
+| WP1 result | Role in WP2 |
+|------------|-------------|
+| Register **\(n \approx 8\)** (band ~6–16) | **Primary fixed budget(s)** for structure sweeps |
+| Register **cliff at \(n \ge 32\)** under pure fixed-point + proportional Δv | Optional **diagnostic** \(n=32\): “can float structure **rescue** wide registers?” |
+| Unary **\(S \approx 256\)** (plateau to 1024) | **Reference baseline** (accuracy / matched state), not exp/mant design space |
+
 **Encoding families to compare (big-picture methods, not micro-tweaks)**
 
 | Encoding | Idea |
@@ -338,7 +367,7 @@ We have **not** systematically designed true **exponent + mantissa** swarms.
 | **Biased exponent + mantissa** | Some digits choose a scale \(2^e\) or \(3^e\); others fill significand |
 | **Shared block scale** | One scale per row/block (microscaling-style), digits only for local shape |
 | **Log-domain / multiplicative** | Digits update multiplicative factors (closer to LNS); different update rule |
-| **Unary vs place-value vs float-split** | Same total bit budget, different structure |
+| **Unary baseline** | Same train recipe; \(S \approx 256\) (or matched state bytes)—no exp/mant inside unary |
 
 **Sub-question: which bits are exponent, which are mantissa?**
 
@@ -363,65 +392,90 @@ not which lr wins.
 
 **Hypotheses**
 
-1. **Fixed-point is enough** for MNIST-scale nets; float split only helps harder tasks.  
+1. **Fixed-point is enough** for MNIST-scale nets at \(n\approx 8\); float split only helps
+   harder tasks or wider budgets.  
 2. **A few exponent bits** unlock training (avoid vanishing small updates / stuck scales)
    without needing huge total \(n\).  
 3. **Optimum split moves** with width \(n\) (e.g. exponent grows slowly, like
    \(\lceil\log_2 \log_2 n\rceil\) or stays constant).  
-4. **Block scales** beat per-weight exponents (cheaper, closer to real low-bit LLM practice).
+4. **Block scales** beat per-weight exponents (cheaper, closer to real low-bit LLM practice).  
+5. **Rescue hypothesis:** pure fixed-point fails at large \(n\) (WP1 cliff); exp/mant or
+   block scale may recover usable accuracy at \(n=32\) without changing train hparams.
 
-**Experimental skeleton**
+**Experimental skeleton (revised after WP1)**
 
-- Fix total budget \(n \in \{16, 32, 64\}\) first (link to Question A).  
+- **Scaffold:** carry-safe register lineage (v0.3), not unary digits.  
+- **Fix total budget** from Question A—not the old guess \(\{16,32,64\}\) alone:  
+  - **Primary:** \(n \in \{8, 16\}\) (healthy fixed-point region).  
+  - **Diagnostic (optional):** \(n = 32\) only to test rescue of the width cliff.  
+  - Do **not** default to \(n=64\) until something works at 32.  
 - For each \(n\), sweep **structures** (not tiny hyperparams): pure fixed-point vs
   several exponent/mantissa splits vs one block-scale baseline.  
-- Same train defaults; measure accuracy **and** whether weights use many scales
-  (histogram of exponents / magnitudes).  
-- Later: same encodings on larger models / CIFAR to see if the best structure **moves**.
+- **Unary baseline once:** \(S=256\) (cheap plateau pick; optional \(S=1024\) peak check)
+  under the same train defaults—for “does any encoding beat strong unary?”  
+- Same train defaults (atlas patience=5 is fine); measure accuracy **and** whether
+  weights use many scales (histogram of exponents / magnitudes).  
+- Later (WP3): same encodings on larger models / CIFAR to see if the best structure **moves**.
 
 **Success for Question B:** a ranking of **encoding classes**, a recommended default
 split rule (or “depends on \(n\) as follows…”), and evidence whether float-like
-structure is necessary for the Swarm idea or optional.
+structure is necessary for the Swarm idea or optional—plus a note on whether
+structure can **rescue** large-\(n\) fixed-point failure.
 
 ---
 
 ### 4.3 How A and B interact (the real “scaling” picture)
 
-| | Narrow register | Wide register |
-|--|-----------------|---------------|
-| **Fixed-point** | Coarse grid | Fine grid, limited dynamic range unless \(n\) is large |
-| **Exponent + mantissa** | Few scales, coarse detail | Both range and detail—but need a good split |
+| | Narrow register (\(n\sim 8\)) | Wide register (\(n\ge 32\)) |
+|--|------------------------------|----------------------------|
+| **Fixed-point** | Works well on MNIST sketch (WP1 peak) | Fine grid in theory; **failed** under proportional Δv (WP1 cliff) |
+| **Exponent + mantissa** | May be optional if fixed-point is enough | Candidate to restore range / usable steps (rescue probe) |
 
 Research products we want (analogous to scaling-law *statements*, not just tables):
 
-1. **Width law:** accuracy vs \(S\) or \(n\); plateau or dependence on model/data size.  
+1. **Width law (sketch exists):** register unimodal near 8; unary saturates ~256+; **family-dependent**.  
 2. **Structure law:** given \(n\), how to allocate exponent vs mantissa (or “use fixed-point”).  
 3. **Joint rule (stretch goal):** e.g. “total bits grow slowly with depth; exponent bits stay ~3–5.”
 
-Until those exist, “optimum is 16” or “optimum is 1024” would be **guesses** for one toy net.
+WP1 already falsified “optimum is always 16” and “more bits always help” for pure
+fixed-point registers on this net.
 
 ---
 
 ## 5. Proposed work packages (ordered)
 
-### WP1 — Width atlas (Question A)  ← start here
+### WP1 — Width atlas (Question A)  ← **done (MNIST sketch)**
+
+| ID | Content | Status |
+|----|---------|--------|
+| `v0_5_width_register` | Carry-safe \(n_{\mathrm{bits}}\) grid (incl. &lt;8 and up to 62) | **Done** — peak \(n\approx 8\); cliff ≥32 |
+| `v0_5_width_unary` | Unary \(S\) grid through 1024 | **Done** — plateau ~256–1024 |
+| Optional | Densify register \(n\in\{7,9,10,12\}\) matched patience | Low priority polish |
+| Optional | v0.4 ternary width grid | Deferred |
+
+**Protocol spirit:** one network size, one data regime, default train settings; vary width only.
+Atlas default early-stop **patience=5** (ranking, not polish).  
+**Deliverable:** curves + note — see `experiments/v0_5_NOTES.md`,
+`experiments/v0_5_width_*/`.
+
+### WP2 — Encoding atlas (Question B)  ← **start here**
 
 | ID | Content |
 |----|---------|
-| `v0_5_width_unary` | Unary Swarm, \(S \in \{8,16,32,64,128,256,512,1024\}\) (as far as compute allows) |
-| `v0_5_width_register` | v0.3 carry-safe, \(n_{\mathrm{bits}}\) on the same grid |
-| Optional | v0.4 width grid for ternary |
+| `v0_6_encoding` | **Register scaffold**; fixed total \(n\) from WP1; compare fixed-point vs exp/mantissa vs block scale; unary \(S\approx 256\) as baseline only |
 
-**Protocol spirit:** one network size, one data regime, default train settings; vary width only.  
-**Deliverable:** curves + short note: plateau? peak? blow-up at large \(S\)?
+**Budgets (locked from WP1, not re-swept inside structure cells):**
 
-### WP2 — Encoding atlas (Question B)
+| \(n\) | Role |
+|------:|------|
+| **8** | Primary (register local optimum) |
+| **16** | Primary (still healthy fixed-point) |
+| **32** | Optional diagnostic (“rescue” wide fixed-point cliff) |
 
-| ID | Content |
-|----|---------|
-| `v0_6_encoding` | Fixed total \(n\); compare fixed-point vs exp/mantissa splits vs block scale |
+**Not the plan:** full encoding grids at every unary \(S\), or re-tuning lr per encoding.
 
-**Deliverable:** which encoding class works; default split rule for the Swarm idea.
+**Deliverable:** ranking of encoding classes; default split rule; unary baseline comparison;
+note on rescue at large \(n\) if probed.
 
 ### WP3 — Do the optima move? (scaling-style)
 
@@ -430,7 +484,8 @@ Repeat a **sparse** subset of WP1/WP2 on:
 - deeper / wider MLP, and/or  
 - CIFAR-scale vision toy  
 
-Ask: does preferred width or preferred exp/mant split **shift** with scale?
+Ask: does preferred width (\(n\approx 8\), \(S\approx 256\)) or preferred exp/mant split
+**shift** with scale?
 
 ### Explicitly deferred
 
@@ -438,32 +493,40 @@ Ask: does preferred width or preferred exp/mant split **shift** with scale?
 - STE vs Swarm scoreboard optimization  
 - Hyperparameter grids (lr, momentum, recruit_rate) except when a representation is **broken** without a minimal fix  
 - Full LLM pretrain, pure integer backward, committing dataset blobs  
+- Exhaustive integer densify of every \(n\) or \(S\) (sparse is enough at one seed)
 
 ---
 
 ## 6. Suggested experiment IDs
 
-| ID | Focus |
-|----|--------|
-| `v0_5_width_unary` | Question A, unary family |
-| `v0_5_width_register` | Question A, carry-safe binary |
-| `v0_6_encoding` | Question B, exp vs mantissa structures |
-| `v0_7_scale_shift` | Do optima move with model/data size? |
+| ID | Focus | Status |
+|----|--------|--------|
+| `v0_5_width_unary` | Question A, unary family | Done (sketch) |
+| `v0_5_width_register` | Question A, carry-safe binary | Done (sketch) |
+| `v0_6_encoding` | Question B, exp vs mantissa structures | **Next** |
+| `v0_7_scale_shift` | Do optima move with model/data size? | After WP2 |
 
-PROTOCOLS under `experiments/<id>/PROTOCOL.md`; log to DuckDB when useful.
+PROTOCOLS under `experiments/<id>/PROTOCOL.md`; notes in `experiments/v0_5_NOTES.md`
+(and later `v0_6_*`); log to DuckDB when useful.
 
 ---
 
 ## 7. Recommended immediate action
 
-1. Keep roadmap on **`plan/swarm-roadmap`** (this document).  
-2. Implement **`v0_5_width_register`** first (v0.3 scaffold, width grid including large \(n\)
-   as far as memory allows)—answers “is 16 special or just what we tried?”  
-3. Parallel or next: **`v0_5_width_unary`** so unary \(S\) and register \(n\) are not mixed.  
-4. Then **`v0_6_encoding`** with fixed total bit budget and several exp/mantissa designs.  
-5. Only after curves exist: sparse scaling check (deeper net / CIFAR).
+1. Keep this roadmap current when representation conclusions change.  
+2. ~~WP1 width atlas~~ **done** — register \(n\approx 8\), unary plateau \(S\approx 256\)–1024.  
+3. **Implement `v0_6_encoding` next:**  
+   - scaffold = **register / carry-safe** (v0.3 lineage);  
+   - lock \(n \in \{8, 16\}\) (+ optional 32 rescue);  
+   - vary **encoding class** only (fixed-point, exp/mant splits, block scale);  
+   - unary **\(S=256\)** once as baseline (not an encoding grid).  
+4. Optional polish: densify register \(n\in\{7,9,10,12\}\) with matched patience—only if
+   WP2 needs a sharper default \(n\).  
+5. Only after encoding curves exist: sparse WP3 scaling check (deeper net / CIFAR).
 
-**Default scaffold:** v0.3 carry-safe for register experiments; v0.1-style for pure swarm population size; v0.4 when ternary structure is the object of study.
+**Default scaffold:** v0.3 carry-safe for register **and** encoding experiments;
+v0.1-style for pure swarm population size / unary baseline; v0.4 when ternary
+structure is the object of study.
 
 ---
 
@@ -475,6 +538,11 @@ python scripts/download_datasets.py --mnist --no-cifar
 
 python experiments/v0_3/train.py --ln-mode none   # reference register
 python experiments/v0_1/train.py --ln-mode none   # reference unary (if CLI matches)
+
+# WP1 width atlas
+python experiments/v0_5_width_register/train.py --ln-mode none --seed 42
+python experiments/v0_5_width_unary/train.py --ln-mode none --seed 42
+# Summaries merge on-disk per-width JSONs; results under results/v0_5_*/ (gitignored)
 ```
 
 Unit tests / CI: `pytest experiments/v0_*/test_*.py tests/` — **no** dataset download.

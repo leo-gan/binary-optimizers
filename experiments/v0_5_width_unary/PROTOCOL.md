@@ -23,7 +23,7 @@ majority / STE through normalized sum.
 | `hidden` | 128 |
 | `ln_mode` | default `none` |
 | Width grid | \(S \in \{8,16,32,64,128,256,512,1024\}\) (skip if OOM) |
-| epochs / patience | 80 / 10 |
+| epochs / patience | 80 / **5** (early stop; atlas ranking, not polish) |
 | seed | 42 |
 | Optimizer | v0.1 defaults (`recruit_rate=1e4`, …) |
 
