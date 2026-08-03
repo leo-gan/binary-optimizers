@@ -45,19 +45,33 @@ from .db import (
 from .import_json import import_results, parse_result_json, stable_run_id
 from .paths import ENV_DB, default_db_path, repo_root
 from .report import build_report, print_report
+from .versions import (  # noqa: F401
+    REGISTRY,
+    TRAIN_BUDGET_PROTOCOL,
+    config_version_fields,
+    db_notes,
+    enrich_config,
+    get_meta,
+)
 
 __all__ = [
     "ENV_DB",
+    "REGISTRY",
     "STATUS_COMPLETED",
     "STATUS_FAILED",
     "STATUS_RUNNING",
+    "TRAIN_BUDGET_PROTOCOL",
     "build_report",
     "compare_best",
+    "config_version_fields",
     "connect",
+    "db_notes",
     "default_db_path",
+    "enrich_config",
     "fail_run",
     "finish_run",
     "format_compare_markdown",
+    "get_meta",
     "get_run",
     "import_results",
     "init_db",

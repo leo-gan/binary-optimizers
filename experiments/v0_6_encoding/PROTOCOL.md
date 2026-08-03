@@ -1,8 +1,11 @@
 # Experiment v0.6 — Encoding atlas (Question B)
 
-**Path:** `experiments/v0_6_encoding/` · **Results:** `results/v0_6_encoding/`  
+**Path:** `experiments/v0_6_encoding/`  
+**Run / DB id:** `v0_6_1_encoding` (parent `v0_6_encoding`; wall-budget protocol)  
+**Results:** `results/v0_6_1_encoding/`  
 **Plan:** WP2 — fixed total bit budget \(n\); vary **encoding structure** only.  
-**Scaffold:** register / carry-safe lineage (not unary digits).
+**Scaffold:** register / carry-safe lineage (not unary digits).  
+See `docs/EXPERIMENT_VERSIONS.md`.
 
 ## Claim
 

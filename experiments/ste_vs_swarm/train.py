@@ -19,7 +19,7 @@ sys.path.insert(0, str(_THIS_DIR))
 
 from binary_optimizers.data.mnist import make_mnist_loaders
 from binary_optimizers.optimizers.ste import STEOptimizer
-from binary_optimizers.store import soft_record_completed_run
+from binary_optimizers.store import db_notes, enrich_config, soft_record_completed_run
 from binary_optimizers.training.budget import (
     EarlyStopTracker,
     TrainBudget,
@@ -30,7 +30,7 @@ from binary_optimizers.training.loops import set_seed
 
 from ste_model import BitNetSTEMLP, LNMode
 
-EXPERIMENT_ID = "ste_vs_swarm"
+EXPERIMENT_ID = "ste_vs_swarm_1"  # parent ste_vs_swarm; wall budget protocol
 METHODS: tuple[str, ...] = ("ste_sgd", "swarm_v0_3", "swarm_v0_4")
 LN_MODES: tuple[LNMode, ...] = ("none", "no_affine", "affine")
 
@@ -360,6 +360,7 @@ def train_one(
         except Exception:  # noqa: BLE001
             pass
 
+    config = enrich_config(EXPERIMENT_ID, {**config, "budget": budget.to_dict()})
     run_id = soft_record_completed_run(
         experiment=EXPERIMENT_ID,
         name=run_name,
@@ -373,6 +374,7 @@ def train_one(
         final_test_loss=final_loss,
         summary=summary,
         checkpoint_path=ck_path,
+        notes=db_notes(EXPERIMENT_ID),
     )
     out = {
         "experiment": EXPERIMENT_ID,

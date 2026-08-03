@@ -1,8 +1,11 @@
 # Experiment v0.5 — Width atlas: **unary** Swarm population size
 
-**Path:** `experiments/v0_5_width_unary/` · **Results:** `results/v0_5_width_unary/`  
+**Path:** `experiments/v0_5_width_unary/`  
+**Run / DB id:** `v0_5_1_width_unary` (parent `v0_5_width_unary`; wall-budget protocol)  
+**Results:** `results/v0_5_1_width_unary/`  
 **Scaffold:** v0.1 unary majority Swarm (`experiments/v0_1/`)  
-**Plan:** Question A — population size \(S\) per weight (not mixed with register \(n\)).
+**Plan:** Question A — population size \(S\) per weight (not mixed with register \(n\)).  
+See `docs/EXPERIMENT_VERSIONS.md`.
 
 ## Claim
 

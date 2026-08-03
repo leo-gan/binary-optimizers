@@ -20,7 +20,8 @@ _REPO = _THIS.parents[1]
 sys.path.insert(0, str(_THIS))
 sys.path.insert(0, str(_REPO))
 
-from binary_optimizers.data.mnist import make_mnist_loaders  # noqa: E402
+from binary_optimizers.data.mnist import make_mnist_loaders
+from binary_optimizers.store import db_notes, enrich_config, soft_record_completed_run  # noqa: E402
 from binary_optimizers.training.budget import (  # noqa: E402
     EarlyStopTracker,
     TrainBudget,
@@ -31,6 +32,9 @@ from binary_optimizers.training.loops import set_seed  # noqa: E402
 
 from model import BitNetEncodingMLP  # noqa: E402
 from optimizer import SwarmOptimizerV06  # noqa: E402
+
+# Protocol rev (parent v0_6_encoding). See docs/EXPERIMENT_VERSIONS.md
+EXPERIMENT_ID = "v0_6_1_encoding"
 
 # --- step scaling (same spirit as v0.5 register) ---
 
@@ -346,7 +350,7 @@ def _train_loop(
     final_acc, final_loss = evaluate(model, test_loader, device)
     final_stats = stats_fn()
     out = {
-        "experiment": "v0_6_encoding",
+        "experiment": EXPERIMENT_ID,
         **cell.to_dict(),
         "ln_mode": args.ln_mode,
         "seed": args.seed,
@@ -369,6 +373,33 @@ def _train_loop(
     with open(jp, "w") as f:
         json.dump(out, f, indent=2)
     print(f"  Saved {jp}", flush=True)
+    cfg = enrich_config(
+        EXPERIMENT_ID,
+        {
+            **cell.to_dict(),
+            "ln_mode": args.ln_mode,
+            "hidden": args.hidden,
+            "budget": budget.to_dict(),
+            **{k: extra[k] for k in extra if k != "history"},
+        },
+    )
+    rid = soft_record_completed_run(
+        experiment=EXPERIMENT_ID,
+        name=cell.tag(),
+        config=cfg,
+        history=history,
+        seed=args.seed,
+        wall_sec=out["wall_sec"],
+        best_test_acc=out["best_test_acc"],
+        best_epoch=out["best_epoch"],
+        final_test_acc=final_acc,
+        final_test_loss=final_loss,
+        summary={"epochs_ran": len(history), "source_json": str(jp)},
+        notes=db_notes(EXPERIMENT_ID),
+    )
+    if rid:
+        out["run_id"] = rid
+        print(f"  Stored run_id={rid} experiment={EXPERIMENT_ID}", flush=True)
     return out
 
 
@@ -404,7 +435,7 @@ def main() -> None:
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     data_root = args.data_root or str(_REPO / "data")
-    results_dir = Path(args.results_dir or (_REPO / "results" / "v0_6_encoding"))
+    results_dir = Path(args.results_dir or (_REPO / "results" / EXPERIMENT_ID))
     cells = (
         parse_cells(args.cells)
         if args.cells
@@ -456,7 +487,7 @@ def main() -> None:
             curve.append({**cell.to_dict(), "best_test_acc": None, "status": f"error:{type(e).__name__}"})
 
     summary = {
-        "experiment": "v0_6_encoding",
+        "experiment": EXPERIMENT_ID,
         "seed": args.seed,
         "ln_mode": args.ln_mode,
         "hidden": args.hidden,

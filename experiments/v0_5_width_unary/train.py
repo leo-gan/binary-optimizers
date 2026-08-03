@@ -27,7 +27,8 @@ sys.path.insert(0, str(_THIS.parent))
 for _name in ("layers", "model", "optimizer", "metrics"):
     sys.modules.pop(_name, None)
 
-from binary_optimizers.data.mnist import make_mnist_loaders  # noqa: E402
+from binary_optimizers.data.mnist import make_mnist_loaders
+from binary_optimizers.store import db_notes, enrich_config, soft_record_completed_run  # noqa: E402
 from binary_optimizers.training.budget import (  # noqa: E402
     EarlyStopTracker,
     TrainBudget,
@@ -46,6 +47,9 @@ from _width_atlas_common import (  # noqa: E402
     parse_int_list,
     write_summary,
 )
+
+# Protocol rev (parent v0_5_width_unary). See docs/EXPERIMENT_VERSIONS.md
+EXPERIMENT_ID = "v0_5_1_width_unary"
 
 DEFAULT_WIDTHS = [8, 16, 32, 64, 128, 256, 512, 1024]
 
@@ -159,7 +163,7 @@ def run_width(
     final_acc, final_loss = evaluate(model, test_loader, device)
     state_b = approx_unary_state_bytes(hidden, swarm_size)
     out = {
-        "experiment": "v0_5_width_unary",
+        "experiment": EXPERIMENT_ID,
         "coding": "unary_majority",
         "swarm_size": swarm_size,
         "ln_mode": ln_mode,
@@ -182,6 +186,32 @@ def run_width(
     with open(jp, "w") as f:
         json.dump(out, f, indent=2)
     print(f"  Saved {jp}", flush=True)
+    cfg = enrich_config(
+        EXPERIMENT_ID,
+        {
+            "swarm_size": swarm_size,
+            "ln_mode": ln_mode,
+            "hidden": hidden,
+            "budget": budget.to_dict(),
+        },
+    )
+    rid = soft_record_completed_run(
+        experiment=EXPERIMENT_ID,
+        name=f"S{swarm_size}_ln_{ln_mode}",
+        config=cfg,
+        history=history,
+        seed=seed,
+        wall_sec=out["wall_sec"],
+        best_test_acc=out["best_test_acc"],
+        best_epoch=out["best_epoch"],
+        final_test_acc=final_acc,
+        final_test_loss=final_loss,
+        summary={"epochs_ran": len(history), "source_json": str(jp)},
+        notes=db_notes(EXPERIMENT_ID),
+    )
+    if rid:
+        out["run_id"] = rid
+        print(f"  Stored run_id={rid} experiment={EXPERIMENT_ID}", flush=True)
     return out
 
 
@@ -211,7 +241,7 @@ def main() -> None:
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     data_root = args.data_root or str(_REPO / "data")
-    results_dir = Path(args.results_dir or (_REPO / "results" / "v0_5_width_unary"))
+    results_dir = Path(args.results_dir or (_REPO / "results" / EXPERIMENT_ID))
     widths = parse_int_list(args.widths)
     budget = budget_from_args(args)
 
@@ -290,7 +320,7 @@ def main() -> None:
 
     sp = write_summary(
         results_dir,
-        experiment="v0_5_width_unary",
+        experiment=EXPERIMENT_ID,
         seed=args.seed,
         ln_mode=args.ln_mode,
         hidden=args.hidden,

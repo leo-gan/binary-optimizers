@@ -1,8 +1,11 @@
 # Experiment v0.5 — Width atlas: carry-safe binary **register**
 
-**Path:** `experiments/v0_5_width_register/` · **Results:** `results/v0_5_width_register/`  
+**Path:** `experiments/v0_5_width_register/`  
+**Run / DB id:** `v0_5_1_width_register` (parent `v0_5_width_register`; wall-budget protocol)  
+**Results:** `results/v0_5_1_width_register/` · DuckDB `runs.experiment` = same id  
 **Scaffold:** v0.3 carry-safe integer place-value (`experiments/v0_3/`)  
-**Plan:** Question A — how much discrete state **per weight** (register width \(n\))?
+**Plan:** Question A — how much discrete state **per weight** (register width \(n\))?  
+See `docs/EXPERIMENT_VERSIONS.md`.
 
 ## Claim
 

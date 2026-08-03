@@ -20,7 +20,8 @@ if str(_REPO_ROOT) not in sys.path:
 if str(_THIS_DIR) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR))
 
-from binary_optimizers.data.mnist import make_mnist_loaders  # noqa: E402
+from binary_optimizers.data.mnist import make_mnist_loaders
+from binary_optimizers.store import db_notes, enrich_config, soft_record_completed_run  # noqa: E402
 from binary_optimizers.training.budget import (  # noqa: E402
     EarlyStopTracker,
     TrainBudget,
@@ -34,6 +35,9 @@ from model import BitNetPlaceValueSwarmMLP, LNMode  # noqa: E402
 from optimizer import SwarmOptimizerV02  # noqa: E402
 
 LN_MODES: tuple[LNMode, ...] = ("none", "no_affine", "affine")
+
+# Protocol rev (parent v0_2). See docs/EXPERIMENT_VERSIONS.md
+EXPERIMENT_ID = "v0_2_1"
 
 
 @torch.no_grad()
@@ -188,7 +192,7 @@ def train_one_mode(
     model.assert_binary_invariants()
 
     out = {
-        "experiment": "v0_2",
+        "experiment": EXPERIMENT_ID,
         "ln_mode": ln_mode,
         "seed": seed,
         "hidden": hidden,
@@ -219,7 +223,7 @@ def train_one_mode(
     with open(json_path, "w") as f:
         json.dump(out, f, indent=2)
 
-    ckpt_dir = _REPO_ROOT / "checkpoints" / "v0_2"
+    ckpt_dir = _REPO_ROOT / "checkpoints" / EXPERIMENT_ID
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     ckpt_path = ckpt_dir / f"ln_{ln_mode}_seed{seed}.pt"
     torch.save(
@@ -233,6 +237,38 @@ def train_one_mode(
     out["ckpt_path"] = str(ckpt_path)
     print(f"Saved {json_path}", flush=True)
     print(f"Saved {ckpt_path}", flush=True)
+    cfg = enrich_config(
+        EXPERIMENT_ID,
+        {
+            "ln_mode": ln_mode,
+            "hidden": hidden,
+            "n_bits": n_bits,
+            "recruit_rate": recruit_rate,
+            "max_flip_prob": max_flip_prob,
+            "grad_momentum": grad_momentum,
+            "lsb_bias": lsb_bias,
+            "activation": activation,
+            "budget": budget.to_dict(),
+        },
+    )
+    rid = soft_record_completed_run(
+        experiment=EXPERIMENT_ID,
+        name=f"ln_{ln_mode}",
+        config=cfg,
+        history=history,
+        seed=seed,
+        wall_sec=out["wall_sec"],
+        best_test_acc=out["best_test_acc"],
+        best_epoch=out["best_epoch"],
+        final_test_acc=final_test_acc,
+        final_test_loss=final_test_loss,
+        summary={"epochs_ran": len(history), "source_json": str(json_path)},
+        checkpoint_path=ckpt_path,
+        notes=db_notes(EXPERIMENT_ID),
+    )
+    if rid:
+        out["run_id"] = rid
+        print(f"Stored run_id={rid} experiment={EXPERIMENT_ID}", flush=True)
     return out
 
 
@@ -270,7 +306,7 @@ def main() -> None:
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     data_root = args.data_root or str(_REPO_ROOT / "data")
-    results_dir = Path(args.results_dir or (_REPO_ROOT / "results" / "v0_2"))
+    results_dir = Path(args.results_dir or (_REPO_ROOT / "results" / EXPERIMENT_ID))
 
     train_loader, test_loader = make_mnist_loaders(
         root=data_root,
@@ -320,7 +356,7 @@ def main() -> None:
 
     summary_path = results_dir / f"summary_seed{args.seed}.json"
     summary = {
-        "experiment": "v0_2",
+        "experiment": EXPERIMENT_ID,
         "seed": args.seed,
         "device": device,
         "coding": "place_value_2i",

@@ -19,7 +19,7 @@ sys.path.insert(0, str(_REPO_ROOT))
 sys.path.insert(0, str(_THIS_DIR))
 
 from binary_optimizers.data.mnist import make_mnist_loaders
-from binary_optimizers.store import soft_record_completed_run
+from binary_optimizers.store import db_notes, enrich_config, soft_record_completed_run
 from binary_optimizers.training.budget import (
     EarlyStopTracker,
     add_budget_args,
@@ -32,6 +32,9 @@ from model import BitNetTernaryPlaceMLP, LNMode
 from optimizer import SwarmOptimizerV04
 
 LN_MODES: tuple[LNMode, ...] = ("none", "no_affine", "affine")
+
+# Protocol rev (parent v0_4). See docs/EXPERIMENT_VERSIONS.md
+EXPERIMENT_ID = "v0_4_1"
 
 
 @torch.no_grad()
@@ -136,7 +139,7 @@ def train_one_mode(**kw) -> Dict[str, Any]:
         model.to(kw["device"])
     final_acc, final_loss = evaluate(model, kw["test_loader"], kw["device"])
     out = {
-        "experiment": "v0_4",
+        "experiment": EXPERIMENT_ID,
         "coding": "balanced_ternary_place",
         "ln_mode": ln_mode,
         "seed": kw["seed"],
@@ -165,7 +168,7 @@ def train_one_mode(**kw) -> Dict[str, Any]:
     jp = rd / f"ln_{ln_mode}_seed{kw['seed']}.json"
     with open(jp, "w") as f:
         json.dump(out, f, indent=2)
-    ck = _REPO_ROOT / "checkpoints" / "v0_4"
+    ck = _REPO_ROOT / "checkpoints" / EXPERIMENT_ID
     ck.mkdir(parents=True, exist_ok=True)
     ck_path = ck / f"ln_{ln_mode}_seed{kw['seed']}.pt"
     torch.save(
@@ -179,23 +182,27 @@ def train_one_mode(**kw) -> Dict[str, Any]:
     print(f"Saved {jp}", flush=True)
 
     # Dual-write to DuckDB experiment store (soft-fail: never abort training).
-    config = {
-        "coding": out["coding"],
-        "ln_mode": ln_mode,
-        "hidden": out["hidden"],
-        "n_trits": out["n_trits"],
-        "recruit_rate": out["recruit_rate"],
-        "max_step_prob": out["max_step_prob"],
-        "grad_momentum": out["grad_momentum"],
-        "activation": out["activation"],
-        "device": out["device"],
-        "max_step": kw.get("max_step", 64),
-        "step_scale": kw.get("step_scale", 1e6),
-        "ln_lr": kw.get("ln_lr"),
-        "epochs": kw.get("epochs"),
-        "patience": kw.get("patience"),
-        "min_delta": kw.get("min_delta"),
-    }
+    _budget = out.get("budget") or kw.get("budget")
+    if hasattr(_budget, "to_dict"):
+        _budget = _budget.to_dict()
+    config = enrich_config(
+        EXPERIMENT_ID,
+        {
+            "coding": out["coding"],
+            "ln_mode": ln_mode,
+            "hidden": out["hidden"],
+            "n_trits": out["n_trits"],
+            "recruit_rate": out["recruit_rate"],
+            "max_step_prob": out["max_step_prob"],
+            "grad_momentum": out["grad_momentum"],
+            "activation": out["activation"],
+            "device": out["device"],
+            "max_step": kw.get("max_step", 64),
+            "step_scale": kw.get("step_scale", 1e6),
+            "ln_lr": kw.get("ln_lr"),
+            "budget": _budget,
+        },
+    )
     summary = {
         "epochs_ran": out["epochs_ran"],
         "baseline_v0_2_best": out.get("baseline_v0_2_best"),
@@ -204,7 +211,7 @@ def train_one_mode(**kw) -> Dict[str, Any]:
         "source_json": str(jp),
     }
     run_id = soft_record_completed_run(
-        experiment="v0_4",
+        experiment=EXPERIMENT_ID,
         name=f"ln_{ln_mode}",
         config=config,
         history=history,
@@ -216,10 +223,11 @@ def train_one_mode(**kw) -> Dict[str, Any]:
         final_test_loss=out["final_test_loss"],
         summary=summary,
         checkpoint_path=ck_path,
+        notes=db_notes(EXPERIMENT_ID),
     )
     if run_id:
         out["run_id"] = run_id
-        print(f"Stored run_id={run_id}", flush=True)
+        print(f"Stored run_id={run_id} experiment={EXPERIMENT_ID}", flush=True)
     return out
 
 
@@ -244,7 +252,7 @@ def main():
     args = p.parse_args()
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     data_root = args.data_root or str(_REPO_ROOT / "data")
-    results_dir = Path(args.results_dir or (_REPO_ROOT / "results" / "v0_4"))
+    results_dir = Path(args.results_dir or (_REPO_ROOT / "results" / EXPERIMENT_ID))
     train_loader, test_loader = make_mnist_loaders(
         root=data_root,
         batch_size_train=args.batch_size,
@@ -285,7 +293,7 @@ def main():
     sp = results_dir / f"summary_seed{args.seed}.json"
     results_dir.mkdir(parents=True, exist_ok=True)
     with open(sp, "w") as f:
-        json.dump({"experiment": "v0_4", "seed": args.seed, "runs": summaries}, f, indent=2)
+        json.dump({"experiment": EXPERIMENT_ID, "seed": args.seed, "runs": summaries}, f, indent=2)
     print("\n===== v0_4 summary =====", flush=True)
     for s in summaries:
         print(
