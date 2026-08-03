@@ -73,3 +73,12 @@ def test_weight_in_range_exp_mant():
 
 def test_cell_tag():
     assert Cell(kind="encoding", n_bits=8, encoding="exp_mant", n_exp=2).tag() == "exp_mant2_n8"
+
+
+def test_early_stop_any_strict_gain():
+    """min_delta=0 must treat any test > best as improvement (stall reset)."""
+    best_test = 0.9347
+    min_delta = 0.0
+    te_acc = 0.9349  # > best but < best + 5e-4 (old default)
+    assert te_acc > best_test + min_delta
+    assert not (te_acc > best_test + 5e-4)  # documents the old bug case

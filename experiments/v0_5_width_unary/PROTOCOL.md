@@ -23,7 +23,9 @@ majority / STE through normalized sum.
 | `hidden` | 128 |
 | `ln_mode` | default `none` |
 | Width grid | \(S \in \{8,16,32,64,128,256,512,1024\}\) (skip if OOM) |
-| epochs / patience | 80 / **5** (early stop; atlas ranking, not polish) |
+| Budget | max_epochs=80 **and** max_wall_sec=1200 (fair wall clock across \(S\)) |
+| Patience | patience_frac=0.125 of both budgets (~10 ep / 150s without gain) |
+| min_delta | 0 (any strict test gain) |
 | seed | 42 |
 | Optimizer | v0.1 defaults (`recruit_rate=1e4`, …) |
 

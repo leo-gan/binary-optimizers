@@ -19,6 +19,11 @@ sys.path.insert(0, str(_REPO_ROOT))
 sys.path.insert(0, str(_THIS_DIR))
 
 from binary_optimizers.data.mnist import make_mnist_loaders
+from binary_optimizers.training.budget import (
+    EarlyStopTracker,
+    add_budget_args,
+    budget_from_args,
+)
 from binary_optimizers.training.loops import set_seed
 
 from metrics import swarm_stats
@@ -82,15 +87,15 @@ def train_one_mode(**kw) -> Dict[str, Any]:
         ln_lr=kw["ln_lr"],
     )
     history = []
-    best_test, best_epoch, stalled = -1.0, 0, 0
     best_state = None
+    budget = kw["budget"]
+    tracker = EarlyStopTracker(budget)
     print(
         f"\n===== v0_3 | ln_mode={ln_mode} | n_bits={kw['n_bits']} | "
         f"seed={kw['seed']} =====",
         flush=True,
     )
-    t0_run = time.time()
-    for epoch in range(1, kw["epochs"] + 1):
+    for epoch in range(1, budget.max_epochs + 1):
         t0 = time.time()
         tr_acc, tr_loss, flip = train_one_epoch(
             model, opt, kw["train_loader"], kw["device"]
@@ -110,20 +115,17 @@ def train_one_mode(**kw) -> Dict[str, Any]:
             "epoch_sec": time.time() - t0,
         }
         history.append(row)
-        if te_acc > best_test + kw["min_delta"]:
-            best_test, best_epoch, stalled = te_acc, epoch, 0
+        decision = tracker.observe(epoch, te_acc)
+        if decision.improved:
             best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
-        else:
-            stalled += 1
         print(
-            f"epoch {epoch:03d}/{kw['epochs']} | train={tr_acc:.4f} loss={tr_loss:.4f} | "
+            f"epoch {epoch:03d}/{budget.max_epochs} | train={tr_acc:.4f} loss={tr_loss:.4f} | "
             f"test={te_acc:.4f} loss={te_loss:.4f} | flip={flip:.4f} step={opt.last_step_frac:.4f} "
-            f"|g|={opt.last_grad_abs_mean:.3e} | best={best_test:.4f}@{best_epoch} "
-            f"stall={stalled}/{kw['patience']} | {row['epoch_sec']:.1f}s",
+            f"|g|={opt.last_grad_abs_mean:.3e} | {tracker.status_str()} | {row['epoch_sec']:.1f}s",
             flush=True,
         )
-        if stalled >= kw["patience"]:
-            print("Early stop.", flush=True)
+        if decision.stop:
+            print(f"Stop: {decision.reason}", flush=True)
             break
     if best_state is not None:
         model.load_state_dict(best_state)
@@ -142,11 +144,13 @@ def train_one_mode(**kw) -> Dict[str, Any]:
         "activation": kw["activation"],
         "device": kw["device"],
         "epochs_ran": len(history),
-        "best_test_acc": best_test,
-        "best_epoch": best_epoch,
+        "budget": budget.to_dict(),
+        "stop_meta": tracker.meta_dict(),
+        "best_test_acc": tracker.best,
+        "best_epoch": tracker.best_epoch,
         "final_test_acc": final_acc,
         "final_test_loss": final_loss,
-        "wall_sec": time.time() - t0_run,
+        "wall_sec": tracker.wall_sec,
         "history": history,
         "baseline_v0_2_none": 0.9289,
         "baseline_v0_2_best": 0.9365,
@@ -169,9 +173,7 @@ def train_one_mode(**kw) -> Dict[str, Any]:
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--ln-mode", choices=["all", *LN_MODES], default="all")
-    p.add_argument("--epochs", type=int, default=80)
-    p.add_argument("--patience", type=int, default=10)
-    p.add_argument("--min-delta", type=float, default=5e-4)
+    add_budget_args(p)
     p.add_argument("--hidden", type=int, default=128)
     p.add_argument("--n-bits", type=int, default=16)
     p.add_argument("--recruit-rate", type=float, default=1e4)
@@ -194,13 +196,12 @@ def main():
         root=data_root, batch_size_train=args.batch_size, batch_size_test=1000, num_workers=0
     )
     modes = list(LN_MODES) if args.ln_mode == "all" else [args.ln_mode]
+    budget = budget_from_args(args)
     summaries = []
     for mode in modes:
         r = train_one_mode(
             ln_mode=mode,
-            epochs=args.epochs,
-            patience=args.patience,
-            min_delta=args.min_delta,
+            budget=budget,
             hidden=args.hidden,
             n_bits=args.n_bits,
             recruit_rate=args.recruit_rate,

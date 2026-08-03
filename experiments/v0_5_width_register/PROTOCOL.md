@@ -25,7 +25,9 @@ carry-safe adaptive ±Δ on \(v\).
 | `ln_mode` | default `none` (optional override) |
 | Width grid | default `n_bits ∈ {8,16,32,48,62}` (int64-safe; CLI can request more but >62 is skipped) |
 | Large \(n\) note | True integer \(v=0..2^n-1\) needs \(n\le 62\) for int64 encode/decode |
-| epochs / patience | 80 / **5** (early stop on test acc; atlas ranking, not polish) |
+| Budget | max_epochs=80 **and** max_wall_sec=1200 (fair wall clock across widths) |
+| Patience | patience_frac=0.125 of both budgets (~10 ep / 150s without gain) |
+| min_delta | 0 (any strict test gain) |
 | seed | 42 |
 | Optimizer | v0.3 defaults; **max_step / step_scale scaled with \(2^n\)** so \(\Delta v / v_{\max}\) matches the n=16 reference (fair width comparison, not per-width accuracy search) |
 

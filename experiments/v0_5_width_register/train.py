@@ -29,6 +29,12 @@ for _name in ("layers", "model", "optimizer", "metrics"):
     sys.modules.pop(_name, None)
 
 from binary_optimizers.data.mnist import make_mnist_loaders  # noqa: E402
+from binary_optimizers.training.budget import (  # noqa: E402
+    EarlyStopTracker,
+    TrainBudget,
+    add_budget_args,
+    budget_from_args,
+)
 from binary_optimizers.training.loops import set_seed  # noqa: E402
 
 from model import BitNetCarrySafeMLP  # noqa: E402
@@ -102,9 +108,7 @@ def run_width(
     *,
     n_bits: int,
     ln_mode: str,
-    epochs: int,
-    patience: int,
-    min_delta: float,
+    budget: TrainBudget,
     hidden: int,
     seed: int,
     device: str,
@@ -138,15 +142,14 @@ def run_width(
         ln_lr=ln_lr,
     )
     history = []
-    best_test, best_epoch, stalled = -1.0, 0, 0
     best_state = None
+    tracker = EarlyStopTracker(budget)
     print(
         f"\n===== v0_5_width_register | n_bits={n_bits} | ln={ln_mode} | "
         f"max_step={max_step_w} | seed={seed} =====",
         flush=True,
     )
-    t0_run = time.time()
-    for epoch in range(1, epochs + 1):
+    for epoch in range(1, budget.max_epochs + 1):
         t0 = time.time()
         tr_acc, tr_loss, flip = train_one_epoch(model, opt, train_loader, device)
         te_acc, te_loss = evaluate(model, test_loader, device)
@@ -164,21 +167,18 @@ def run_width(
             "epoch_sec": time.time() - t0,
         }
         history.append(row)
-        if te_acc > best_test + min_delta:
-            best_test, best_epoch, stalled = te_acc, epoch, 0
+        decision = tracker.observe(epoch, te_acc)
+        if decision.improved:
             best_state = {
                 k: v.detach().cpu().clone() for k, v in model.state_dict().items()
             }
-        else:
-            stalled += 1
         print(
-            f"  ep {epoch:03d}/{epochs} train={tr_acc:.4f} test={te_acc:.4f} "
-            f"best={best_test:.4f}@{best_epoch} stall={stalled}/{patience} "
-            f"({row['epoch_sec']:.1f}s)",
+            f"  ep {epoch:03d}/{budget.max_epochs} train={tr_acc:.4f} test={te_acc:.4f} "
+            f"{tracker.status_str()} ({row['epoch_sec']:.1f}s)",
             flush=True,
         )
-        if stalled >= patience:
-            print("  Early stop.", flush=True)
+        if decision.stop:
+            print(f"  Stop: {decision.reason}", flush=True)
             break
     if best_state is not None:
         model.load_state_dict(best_state)
@@ -192,12 +192,14 @@ def run_width(
         "ln_mode": ln_mode,
         "seed": seed,
         "hidden": hidden,
-        "best_test_acc": best_test,
-        "best_epoch": best_epoch,
+        "best_test_acc": tracker.best,
+        "best_epoch": tracker.best_epoch,
         "epochs_ran": len(history),
+        "budget": budget.to_dict(),
+        "stop_meta": tracker.meta_dict(),
         "final_test_acc": final_acc,
         "final_test_loss": final_loss,
-        "wall_sec": time.time() - t0_run,
+        "wall_sec": tracker.wall_sec,
         "approx_state_bytes": state_b,
         "max_step_used": max_step_w,
         "step_scale_used": step_scale_w,
@@ -221,14 +223,7 @@ def main() -> None:
         help=f"Comma-separated n_bits (default {DEFAULT_WIDTHS}; max safe {MAX_SAFE_N_BITS})",
     )
     p.add_argument("--ln-mode", type=str, default="none")
-    p.add_argument("--epochs", type=int, default=80)
-    p.add_argument(
-        "--patience",
-        type=int,
-        default=5,
-        help="Early-stop patience (atlas default 5: rank widths fast; use 10 for polish)",
-    )
-    p.add_argument("--min-delta", type=float, default=5e-4)
+    add_budget_args(p)
     p.add_argument("--hidden", type=int, default=128)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--batch-size", type=int, default=128)
@@ -251,6 +246,7 @@ def main() -> None:
         args.results_dir or (_REPO / "results" / "v0_5_width_register")
     )
     widths = parse_int_list(args.widths)
+    budget = budget_from_args(args)
 
     train_loader, test_loader = make_mnist_loaders(
         root=data_root,
@@ -304,9 +300,7 @@ def main() -> None:
             out = run_width(
                 n_bits=n_bits,
                 ln_mode=args.ln_mode,
-                epochs=args.epochs,
-                patience=args.patience,
-                min_delta=args.min_delta,
+                budget=budget,
                 hidden=args.hidden,
                 seed=args.seed,
                 device=device,

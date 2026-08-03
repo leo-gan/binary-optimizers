@@ -35,7 +35,9 @@ Default structure cells: `fixed`, `exp_mant` with \(n_e\in\{2,3,4\}\) (when \(n_
 |------|--------|
 | Topology | Same MNIST MLP as v0.5 (`hidden=128`) |
 | `ln_mode` | default `none` |
-| epochs / patience | 80 / **5** |
+| Budget | **max_epochs=80** and **max_wall_sec=1200** (whichever hits first) |
+| Patience | **patience_frac=0.125** → ~10 epochs **and** 150s wall without gain |
+| min_delta | **0** (any strict test gain resets stall) |
 | seed | 42 |
 | Mantissa steps | Δv/vmax scaled to n=16 reference (same spirit as v0.5 register) |
 | Exp steps | small (`exp_max_step=1`) |

@@ -21,6 +21,12 @@ sys.path.insert(0, str(_THIS))
 sys.path.insert(0, str(_REPO))
 
 from binary_optimizers.data.mnist import make_mnist_loaders  # noqa: E402
+from binary_optimizers.training.budget import (  # noqa: E402
+    EarlyStopTracker,
+    TrainBudget,
+    add_budget_args,
+    budget_from_args,
+)
 from binary_optimizers.training.loops import set_seed  # noqa: E402
 
 from model import BitNetEncodingMLP  # noqa: E402
@@ -195,6 +201,7 @@ def _run_encoding_cell(
         opt,
         cell,
         args=args,
+        budget=args.budget,
         device=device,
         train_loader=train_loader,
         test_loader=test_loader,
@@ -272,6 +279,7 @@ def _run_unary_cell(
         opt,
         cell,
         args=args,
+        budget=args.budget,
         device=device,
         train_loader=train_loader,
         test_loader=test_loader,
@@ -288,6 +296,7 @@ def _train_loop(
     cell: Cell,
     *,
     args,
+    budget: TrainBudget,
     device: str,
     train_loader,
     test_loader,
@@ -297,11 +306,10 @@ def _train_loop(
     stats_fn,
 ) -> dict[str, Any]:
     history = []
-    best_test, best_epoch, stalled = -1.0, 0, 0
     best_state = None
+    tracker = EarlyStopTracker(budget)
     print(f"\n===== v0_6 | {cell.tag()} | ln={args.ln_mode} | seed={args.seed} =====", flush=True)
-    t0_run = time.time()
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(1, budget.max_epochs + 1):
         t0 = time.time()
         tr_acc, tr_loss, flip = train_one_epoch(model, opt, train_loader, device)
         te_acc, te_loss = evaluate(model, test_loader, device)
@@ -319,21 +327,18 @@ def _train_loop(
             **{f"stat_{k}": v for k, v in stats.items()},
         }
         history.append(row)
-        if te_acc > best_test + args.min_delta:
-            best_test, best_epoch, stalled = te_acc, epoch, 0
+        decision = tracker.observe(epoch, te_acc)
+        if decision.improved:
             best_state = {
                 k: v.detach().cpu().clone() for k, v in model.state_dict().items()
             }
-        else:
-            stalled += 1
         print(
-            f"  ep {epoch:03d}/{args.epochs} train={tr_acc:.4f} test={te_acc:.4f} "
-            f"best={best_test:.4f}@{best_epoch} stall={stalled}/{args.patience} "
-            f"({row['epoch_sec']:.1f}s)",
+            f"  ep {epoch:03d}/{budget.max_epochs} train={tr_acc:.4f} test={te_acc:.4f} "
+            f"{tracker.status_str()} ({row['epoch_sec']:.1f}s)",
             flush=True,
         )
-        if stalled >= args.patience:
-            print("  Early stop.", flush=True)
+        if decision.stop:
+            print(f"  Stop: {decision.reason}", flush=True)
             break
     if best_state is not None:
         model.load_state_dict(best_state)
@@ -346,12 +351,14 @@ def _train_loop(
         "ln_mode": args.ln_mode,
         "seed": args.seed,
         "hidden": args.hidden,
-        "best_test_acc": best_test,
-        "best_epoch": best_epoch,
+        "best_test_acc": tracker.best,
+        "best_epoch": tracker.best_epoch,
         "epochs_ran": len(history),
+        "budget": budget.to_dict(),
+        "stop_meta": tracker.meta_dict(),
         "final_test_acc": final_acc,
         "final_test_loss": final_loss,
-        "wall_sec": time.time() - t0_run,
+        "wall_sec": tracker.wall_sec,
         "final_stats": final_stats,
         "history": history,
         "status": "completed",
@@ -375,9 +382,7 @@ def main() -> None:
     )
     p.add_argument("--include-rescue", action="store_true", help="Add n=32 rescue cells")
     p.add_argument("--ln-mode", type=str, default="none")
-    p.add_argument("--epochs", type=int, default=80)
-    p.add_argument("--patience", type=int, default=5)
-    p.add_argument("--min-delta", type=float, default=5e-4)
+    add_budget_args(p)
     p.add_argument("--hidden", type=int, default=128)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--batch-size", type=int, default=128)
@@ -395,6 +400,7 @@ def main() -> None:
     p.add_argument("--ln-lr", type=float, default=1e-2)
     p.add_argument("--activation", type=str, default="relu")
     args = p.parse_args()
+    args.budget = budget_from_args(args)
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     data_root = args.data_root or str(_REPO / "data")
@@ -454,10 +460,10 @@ def main() -> None:
         "seed": args.seed,
         "ln_mode": args.ln_mode,
         "hidden": args.hidden,
-        "patience": args.patience,
+        "budget": args.budget.to_dict(),
         "note": (
             "WP2 encoding atlas: fixed n from WP1; vary structure; "
-            "unary S=256 baseline; no per-cell hparam search"
+            "unary S=256 baseline; wall+epoch budgets; no per-cell hparam search"
         ),
         "curve": curve,
     }

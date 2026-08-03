@@ -20,6 +20,12 @@ sys.path.insert(0, str(_THIS_DIR))
 from binary_optimizers.data.mnist import make_mnist_loaders
 from binary_optimizers.optimizers.ste import STEOptimizer
 from binary_optimizers.store import soft_record_completed_run
+from binary_optimizers.training.budget import (
+    EarlyStopTracker,
+    TrainBudget,
+    add_budget_args,
+    budget_from_args,
+)
 from binary_optimizers.training.loops import set_seed
 
 from ste_model import BitNetSTEMLP, LNMode
@@ -253,9 +259,7 @@ def train_one(
     *,
     method: str,
     ln_mode: LNMode,
-    epochs: int,
-    patience: int,
-    min_delta: float,
+    budget: TrainBudget,
     seed: int,
     device: str,
     train_loader,
@@ -268,18 +272,15 @@ def train_one(
     )
     config["device"] = device
     config["seed"] = seed
-    config["epochs"] = epochs
-    config["patience"] = patience
-    config["min_delta"] = min_delta
+    config["budget"] = budget.to_dict()
 
     history: List[dict[str, Any]] = []
-    best_test, best_epoch, stalled = -1.0, 0, 0
     best_state = None
+    tracker = EarlyStopTracker(budget)
     run_name = f"{method}_ln_{ln_mode}"
     print(f"\n===== {EXPERIMENT_ID} | {run_name} | seed={seed} =====", flush=True)
-    t0_run = time.time()
 
-    for epoch in range(1, epochs + 1):
+    for epoch in range(1, budget.max_epochs + 1):
         t0 = time.time()
         if bundle["kind"] == "ste":
             tr_acc, tr_loss = train_one_epoch_ste(
@@ -307,31 +308,30 @@ def train_one(
                 row["step_frac"] = float(bundle["opt"].last_step_frac)
         history.append(row)
 
-        if te_acc > best_test + min_delta:
-            best_test, best_epoch, stalled = te_acc, epoch, 0
+        decision = tracker.observe(epoch, te_acc)
+        if decision.improved:
             best_state = {
                 k: v.detach().cpu().clone() for k, v in model.state_dict().items()
             }
-        else:
-            stalled += 1
 
         flip_s = f" flip={flip:.4f}" if flip is not None else ""
         print(
-            f"epoch {epoch:03d}/{epochs} | train={tr_acc:.4f} loss={tr_loss:.4f} | "
+            f"epoch {epoch:03d}/{budget.max_epochs} | train={tr_acc:.4f} loss={tr_loss:.4f} | "
             f"test={te_acc:.4f} loss={te_loss:.4f}{flip_s} | "
-            f"best={best_test:.4f}@{best_epoch} stall={stalled}/{patience} | "
-            f"{row['epoch_sec']:.1f}s",
+            f"{tracker.status_str()} | {row['epoch_sec']:.1f}s",
             flush=True,
         )
-        if stalled >= patience:
-            print("Early stop.", flush=True)
+        if decision.stop:
+            print(f"Stop: {decision.reason}", flush=True)
             break
 
     if best_state is not None:
         model.load_state_dict(best_state)
         model.to(device)
     final_acc, final_loss = evaluate(model, test_loader, device)
-    wall_sec = time.time() - t0_run
+    wall_sec = tracker.wall_sec
+    best_test = tracker.best
+    best_epoch = tracker.best_epoch
 
     ck_dir = _REPO_ROOT / "checkpoints" / EXPERIMENT_ID
     ck_dir.mkdir(parents=True, exist_ok=True)
@@ -412,9 +412,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         choices=["all", *LN_MODES],
         default="all",
     )
-    p.add_argument("--epochs", type=int, default=80)
-    p.add_argument("--patience", type=int, default=10)
-    p.add_argument("--min-delta", type=float, default=5e-4)
+    add_budget_args(p)
     p.add_argument("--hidden", type=int, default=128)
     p.add_argument("--activation", choices=("relu", "squared_relu"), default="relu")
     p.add_argument("--batch-size", type=int, default=128)
@@ -472,6 +470,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         step_scale=args.step_scale,
     )
 
+    budget = budget_from_args(args)
     results: list[dict[str, Any]] = []
     for method in methods:
         for ln_mode in ln_modes:
@@ -479,9 +478,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 train_one(
                     method=method,
                     ln_mode=ln_mode,
-                    epochs=args.epochs,
-                    patience=args.patience,
-                    min_delta=args.min_delta,
+                    budget=budget,
                     seed=args.seed,
                     device=device,
                     train_loader=train_loader,

@@ -25,6 +25,12 @@ if str(_THIS_DIR) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR))
 
 from binary_optimizers.data.mnist import make_mnist_loaders  # noqa: E402
+from binary_optimizers.training.budget import (  # noqa: E402
+    EarlyStopTracker,
+    TrainBudget,
+    add_budget_args,
+    budget_from_args,
+)
 from binary_optimizers.training.loops import set_seed  # noqa: E402
 
 from metrics import swarm_stats  # noqa: E402
@@ -85,9 +91,7 @@ def train_one_epoch(
 def train_one_mode(
     *,
     ln_mode: LNMode,
-    epochs: int,
-    patience: int,
-    min_delta: float,
+    budget: TrainBudget,
     hidden: int,
     swarm_size: int,
     recruit_rate: float,
@@ -120,19 +124,16 @@ def train_one_mode(
     )
 
     history: List[Dict[str, Any]] = []
-    best_test = -1.0
-    best_epoch = 0
     best_state: Optional[Dict[str, torch.Tensor]] = None
-    stalled = 0
+    tracker = EarlyStopTracker(budget)
 
     print(
         f"\n===== v0_1 | ln_mode={ln_mode} | seed={seed} | "
-        f"recruit_rate={recruit_rate} =====",
+        f"recruit_rate={recruit_rate} | budget={budget.to_dict()} =====",
         flush=True,
     )
-    t_run0 = time.time()
 
-    for epoch in range(1, epochs + 1):
+    for epoch in range(1, budget.max_epochs + 1):
         t0 = time.time()
         train_acc, train_loss, flip_frac = train_one_epoch(
             model, opt, train_loader, device
@@ -155,30 +156,24 @@ def train_one_mode(
         }
         history.append(row)
 
-        improved = test_acc > best_test + min_delta
-        if improved:
-            best_test = test_acc
-            best_epoch = epoch
-            stalled = 0
+        decision = tracker.observe(epoch, test_acc)
+        if decision.improved:
             best_state = {
                 k: v.detach().cpu().clone() for k, v in model.state_dict().items()
             }
-        else:
-            stalled += 1
 
         print(
-            f"epoch {epoch:03d}/{epochs} | "
+            f"epoch {epoch:03d}/{budget.max_epochs} | "
             f"train={train_acc:.4f} loss={train_loss:.4f} | "
             f"test={test_acc:.4f} loss={test_loss:.4f} | "
             f"flip={flip_frac:.4f} |g|={opt.last_grad_abs_mean:.3e} "
             f"margin={stats['mean_abs_margin']:.2f} | "
-            f"best={best_test:.4f}@{best_epoch} stall={stalled}/{patience} | "
-            f"{dt:.1f}s",
+            f"{tracker.status_str()} | {dt:.1f}s",
             flush=True,
         )
 
-        if stalled >= patience:
-            print(f"Early stop: no test_acc gain > {min_delta} for {patience} epochs.")
+        if decision.stop:
+            print(f"Stop: {decision.reason}", flush=True)
             break
 
     if best_state is not None:
@@ -201,14 +196,13 @@ def train_one_mode(
         "ln_lr": ln_lr,
         "device": device,
         "epochs_ran": len(history),
-        "max_epochs": epochs,
-        "patience": patience,
-        "min_delta": min_delta,
-        "best_test_acc": best_test,
-        "best_epoch": best_epoch,
+        "budget": budget.to_dict(),
+        "stop_meta": tracker.meta_dict(),
+        "best_test_acc": tracker.best,
+        "best_epoch": tracker.best_epoch,
         "final_test_acc": final_test_acc,
         "final_test_loss": final_test_loss,
-        "wall_sec": time.time() - t_run0,
+        "wall_sec": tracker.wall_sec,
         "history": history,
         "swarm_stats_final": swarm_stats(model),
     }
@@ -243,19 +237,7 @@ def main() -> None:
         default="all",
         help="LayerNorm mode, or all three",
     )
-    parser.add_argument("--epochs", type=int, default=80, help="Max epochs")
-    parser.add_argument(
-        "--patience",
-        type=int,
-        default=10,
-        help="Early-stop patience on test acc",
-    )
-    parser.add_argument(
-        "--min-delta",
-        type=float,
-        default=5e-4,
-        help="Min test_acc improvement to reset patience",
-    )
+    add_budget_args(parser)
     parser.add_argument("--hidden", type=int, default=128)
     parser.add_argument("--swarm-size", type=int, default=32)
     parser.add_argument(
@@ -308,13 +290,12 @@ def main() -> None:
     else:
         modes = [args.ln_mode]  # type: ignore[list-item]
 
+    budget = budget_from_args(args)
     summaries = []
     for mode in modes:
         result = train_one_mode(
             ln_mode=mode,
-            epochs=args.epochs,
-            patience=args.patience,
-            min_delta=args.min_delta,
+            budget=budget,
             hidden=args.hidden,
             swarm_size=args.swarm_size,
             recruit_rate=args.recruit_rate,
@@ -352,9 +333,7 @@ def main() -> None:
             "grad_momentum": args.grad_momentum,
             "activation": args.activation,
             "ln_lr": args.ln_lr,
-            "epochs": args.epochs,
-            "patience": args.patience,
-            "min_delta": args.min_delta,
+            "budget": budget.to_dict(),
             "batch_size": args.batch_size,
         },
         "runs": summaries,
