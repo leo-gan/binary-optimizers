@@ -22,6 +22,7 @@ def test_registry_has_budget_revs():
         "v0_5_1_width_unary",
         "v0_6_1_encoding",
         "ste_vs_swarm_1",
+        "v0_7_cifar_encoding",
     ):
         m = get_meta(eid)
         assert m["protocol"] == TRAIN_BUDGET_PROTOCOL
