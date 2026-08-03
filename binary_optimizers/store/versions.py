@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-# Shared train-loop protocol introduced with wall-clock budgets.
-TRAIN_BUDGET_PROTOCOL = "wall_epoch_budget_v1"
+# Pure wall-clock train protocol (no epoch-based early stop by default).
+TRAIN_BUDGET_PROTOCOL = "pure_wall_budget_v1"
 
 # experiment_id -> metadata
 REGISTRY: dict[str, dict[str, Any]] = {
@@ -22,8 +22,8 @@ REGISTRY: dict[str, dict[str, Any]] = {
         "code_dir": "experiments/v0_1",
         "protocol": TRAIN_BUDGET_PROTOCOL,
         "changelog": (
-            "Train budget: max_wall_sec + max_epochs; patience_frac of both; "
-            "min_delta default 0 (any strict test gain)."
+            "Pure wall budget: max_wall_sec + wall patience only; "
+            "no epoch early-stop; min_delta=0."
         ),
     },
     "v0_2_1": {
@@ -31,8 +31,7 @@ REGISTRY: dict[str, dict[str, Any]] = {
         "code_dir": "experiments/v0_2",
         "protocol": TRAIN_BUDGET_PROTOCOL,
         "changelog": (
-            "Train budget: max_wall_sec + max_epochs; patience_frac of both; "
-            "min_delta default 0."
+            "Pure wall budget: max_wall_sec + wall patience only; no epoch early-stop."
         ),
     },
     "v0_3_1": {
@@ -40,8 +39,7 @@ REGISTRY: dict[str, dict[str, Any]] = {
         "code_dir": "experiments/v0_3",
         "protocol": TRAIN_BUDGET_PROTOCOL,
         "changelog": (
-            "Train budget: max_wall_sec + max_epochs; patience_frac of both; "
-            "min_delta default 0."
+            "Pure wall budget: max_wall_sec + wall patience only; no epoch early-stop."
         ),
     },
     "v0_4_1": {
@@ -49,8 +47,7 @@ REGISTRY: dict[str, dict[str, Any]] = {
         "code_dir": "experiments/v0_4",
         "protocol": TRAIN_BUDGET_PROTOCOL,
         "changelog": (
-            "Train budget: max_wall_sec + max_epochs; patience_frac of both; "
-            "min_delta default 0."
+            "Pure wall budget: max_wall_sec + wall patience only; no epoch early-stop."
         ),
     },
     "v0_5_1_width_register": {
@@ -58,8 +55,7 @@ REGISTRY: dict[str, dict[str, Any]] = {
         "code_dir": "experiments/v0_5_width_register",
         "protocol": TRAIN_BUDGET_PROTOCOL,
         "changelog": (
-            "Width atlas re-run protocol: wall+epoch budget, patience_frac, "
-            "min_delta=0 (legacy parent used epoch-only patience)."
+            "Width atlas re-run: pure wall budget (parent used epoch-only patience)."
         ),
     },
     "v0_5_1_width_unary": {
@@ -67,8 +63,7 @@ REGISTRY: dict[str, dict[str, Any]] = {
         "code_dir": "experiments/v0_5_width_unary",
         "protocol": TRAIN_BUDGET_PROTOCOL,
         "changelog": (
-            "Width atlas re-run protocol: wall+epoch budget, patience_frac, "
-            "min_delta=0."
+            "Width atlas re-run: pure wall budget (parent used epoch-only patience)."
         ),
     },
     "v0_6_1_encoding": {
@@ -76,8 +71,7 @@ REGISTRY: dict[str, dict[str, Any]] = {
         "code_dir": "experiments/v0_6_encoding",
         "protocol": TRAIN_BUDGET_PROTOCOL,
         "changelog": (
-            "Encoding atlas re-run protocol: wall+epoch budget, patience_frac, "
-            "min_delta=0 (parent primary grid used epoch-only early stop)."
+            "Encoding atlas re-run: pure wall budget (parent used epoch-only stop)."
         ),
     },
     "ste_vs_swarm_1": {
@@ -85,8 +79,7 @@ REGISTRY: dict[str, dict[str, Any]] = {
         "code_dir": "experiments/ste_vs_swarm",
         "protocol": TRAIN_BUDGET_PROTOCOL,
         "changelog": (
-            "Shared-protocol comparison re-run: wall+epoch budget, patience_frac, "
-            "min_delta=0."
+            "Comparison re-run: pure wall budget."
         ),
     },
 }

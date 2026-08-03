@@ -1,8 +1,12 @@
 # Train budget design (wall clock + epochs)
 
-**Status:** active protocol `wall_epoch_budget_v1`  
+**Status:** active protocol **`pure_wall_budget_v1`**  
 **Code:** `binary_optimizers/training/budget.py`  
 **Versioning:** re-runs use patch ids (`v0_2_1`, …) — see `docs/EXPERIMENT_VERSIONS.md`
+
+> **Policy (current):** stop only on **wall clock** (`max_wall_sec`, wall patience).  
+> Do **not** early-stop on epoch count or epoch patience. Optional `--use-epoch-stops`
+> restores the older dual rule for legacy debugging only.
 
 This note records **why** we moved off epoch-only early stop, what defaults we
 chose, and what we deliberately did **not** optimize for.
@@ -71,17 +75,34 @@ Non-goals:
 
 ## 3. Decisions (defaults)
 
+### 3.0 Pure wall only — does it make sense?
+
+**Yes**, for representation ranking:
+
+1. The scientific unit of fairness is **“how long we train this cell on this host”**,
+   not “how many full data passes completed.” Epoch length is an artifact of
+   coding (S, n_bits, exp_mant).  
+2. Stopping on epoch patience reintroduces the bias: fast cells stop after a short
+   wall stall, slow cells after a long one.  
+3. A hard epoch cap alone still lets slow cells spend hours and fast cells finish
+   early—**unless** wall is also capped; with pure wall, the epoch cap is only a
+   safety fuse (default 10 000).  
+4. Logs still print epoch indices for readability; epochs are **not** the stop rule.
+
+**Caveat:** wall time is machine-dependent. Document host when publishing curves.
+Optional later: step/FLOP budgets for multi-device work.
+
 Implemented in `TrainBudget` / CLI (`add_budget_args`):
 
 | Knob | Default | Decision |
 |------|---------|----------|
-| `max_epochs` | **80** | Keep historical upper bound; safety + log readability. Rarely the binding limit for *slow* cells under the wall budget. |
-| `max_wall_sec` | **1200** (20 min) | Primary fairness cap per **run** (one ln_mode / one width / one encoding cell). |
-| `patience_frac` | **0.125** (12.5%) | Single fraction applied to **both** budgets. |
-| → `patience_epochs` | **10** | `round(0.125 × 80)`. |
+| `max_wall_sec` | **1200** (20 min) | **Primary** hard cap per run. |
+| `patience_frac` | **0.125** (12.5%) | Wall stall = fraction of wall budget. |
 | → `patience_wall_sec` | **150 s** | `0.125 × 1200`. |
-| `min_delta` | **0** | Any strict `test_acc > best` updates best and resets stall. |
-| Stop rule | first of | `max_wall_sec` · `max_epochs` · epoch patience · wall patience |
+| `min_delta` | **0** | Any strict `test_acc > best` resets wall stall. |
+| `max_epochs` | **10000** | Safety fuse only; **not** used for early stop in pure-wall mode. |
+| Epoch patience | **off** | No stop on “N epochs without gain.” |
+| Stop rule (pure wall) | first of | `max_wall_sec` · `patience_wall` · safety `max_epochs` |
 
 ### 3.1 Why 20 minutes wall (`max_wall_sec=1200`)?
 
@@ -103,38 +124,18 @@ If 1200 s is too tight for a slow cell, accuracy may be **under-trained relative
 to a long unary run in the legacy parent id**—that is acceptable for atlas
 ranking under a declared protocol; document overrides in NOTES when used.
 
-### 3.2 Why patience as a **fraction** of the budget?
+### 3.2 Why patience as a **fraction of wall only**?
 
-Absolute patience (5 epochs, or “always 3 minutes”) couples to one regime:
+- Absolute “5 epochs” is unfair (see §1).  
+- Absolute “always 180 s stall” is fine but couples to one wall budget; a
+  fraction keeps stall proportional if you raise `--max-wall-sec` for polish.  
+- **12.5% of 1200 s = 150 s** — about 7–15 short epochs or ~1 long unary epoch
+  without improvement before stop; enough to avoid single-epoch noise, short
+  enough for atlas throughput.
 
-- 5 epochs was OK for ~15–30 s/ep atlas work; it is **too short in wall time**
-  for fast cells and **too long in wall time** for huge S if you only count
-  epochs.  
-- Fraction of **max_epochs** keeps “about an eighth of the allowed schedule”
-  if wall is disabled (`--max-wall-sec 0`).  
-- Fraction of **max_wall_sec** keeps “about an eighth of the allowed wall”
-  without improvement—**same wall stall** for fast and slow epochs.
+Override: `--patience-frac 0.2` → 240 s stall under a 20 min budget.
 
-**Why 12.5% specifically?**
-
-- Matches a readable pair: **10 / 80 epochs** and **150 / 1200 s**.  
-- Stricter than old “patience 10 of 80” only in that wall stall is *also*
-  enforced; looser than atlas “patience 5” on the epoch axis so small noise
-  plateaus get a bit more room under the new dual rule.  
-- Easy to change: one knob `--patience-frac 0.1` → 8 ep / 120 s wall.
-
-Absolute epoch override remains: `--patience 15` sets epoch patience only;
-wall patience still follows `patience_frac × max_wall_sec` unless we later add
-a separate flag (not needed yet).
-
-### 3.3 Why keep both wall patience **and** epoch patience?
-
-- **Wall patience:** fairness across epoch lengths (primary fix).  
-- **Epoch patience:** if wall limit is disabled, behavior stays defined; also
-  stops a fast cell that is oscillating without any long wall stall if we only
-  had a large wall patience (edge case).  
-- Either can fire first; logs print `Stop: <reason>` (`patience_wall`,
-  `patience_epochs`, `max_wall_sec`, `max_epochs`).
+Legacy dual epoch+wall: `--use-epoch-stops` (not default).
 
 ### 3.4 Why `min_delta=0`?
 
@@ -178,11 +179,11 @@ and both stop after ~2.5 min without improvement on the wall axis.
 
 | Situation | Suggested override |
 |-----------|-------------------|
-| Polish one winning cell | `--max-wall-sec 3600 --patience-frac 0.2` or `--patience 20` |
-| Smoke / CI | `--epochs 3 --max-wall-sec 120 --patience-frac 0.5` |
-| CPU-only laptop, slower epochs | raise `--max-wall-sec` (e.g. 2400) rather than only epochs |
-| Disable wall (epoch-only, legacy-like) | `--max-wall-sec 0` (patience_wall off; only epoch patience + max epochs) |
-| CIFAR / deeper net (future WP3) | Revisit defaults; 1200 s will likely be too small—set in that experiment’s PROTOCOL |
+| Polish one winning cell | `--max-wall-sec 3600 --patience-frac 0.2` |
+| Smoke / CI | `--max-wall-sec 120 --patience-frac 0.5` |
+| CPU-only / slower host | raise `--max-wall-sec` (e.g. 2400–3600) |
+| Legacy epoch-based stop | `--use-epoch-stops --epochs 80 --patience 10` (and optionally still set wall) |
+| CIFAR / deeper net (WP3) | Raise wall in that PROTOCOL; 1200 s is MNIST-atlas sized |
 
 ---
 
@@ -192,7 +193,7 @@ Changing the train budget **is** a protocol change:
 
 - New runs → **`v0_N_1`** (or compound `v0_5_1_width_*`, `v0_6_1_encoding`).  
 - DuckDB: `runs.experiment` = new id; `notes` + `config` store parent and
-  `train_protocol=wall_epoch_budget_v1`.  
+  `train_protocol=pure_wall_budget_v1`.  
 - Legacy results stay under parent ids for reference only.
 
 ---
@@ -213,11 +214,11 @@ Changing the train budget **is** a protocol change:
 
 | Decision | Choice | Primary reason |
 |----------|--------|----------------|
-| Shared resource | Wall-clock | Epoch cost differs by representation |
-| Default wall | 20 min / run | Fits MNIST atlas grids; covers most register peaks; bounds unary |
-| Default epochs | 80 | Historical safety cap |
-| Patience | 12.5% of wall **and** epochs | One knob; fair stall for fast/slow epochs |
+| Shared resource | **Wall-clock only** | Epoch cost differs by representation |
+| Default wall | 20 min / run | MNIST atlas throughput; covers register peaks |
+| Epoch stops | **Off** by default | Avoid reintroducing epoch bias |
+| Patience | 12.5% of **wall** (150 s) | Fair stall for fast/slow epochs |
 | min_delta | 0 | Strict improvements always count |
 | Versioning | Patch id (`_1`) | Isolate protocol from legacy numbers |
 
-When in doubt: **same wall budget, same wall patience, declare the protocol id.**
+When in doubt: **same wall budget, same wall patience, declare `pure_wall_budget_v1`.**
