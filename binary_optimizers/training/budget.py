@@ -4,6 +4,9 @@ Epoch-only budgets bias comparisons: a fast epoch burns stall patience in
 little wall time, while a slow epoch gets more compute per patience count.
 This module stops on **either** wall budget or epoch cap, and measures
 patience as a **fraction** of both budgets.
+
+Design rationale and default choices: ``docs/TRAIN_BUDGET.md``
+(protocol id ``wall_epoch_budget_v1``).
 """
 
 from __future__ import annotations

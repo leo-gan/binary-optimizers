@@ -19,6 +19,9 @@ protocol** changes so re-runs are not mixed with legacy numbers.
 (default 80); patience = `patience_frac` (default 0.125) of **both** budgets;
 `min_delta` default 0.
 
+**Why these numbers:** see **`docs/TRAIN_BUDGET.md`** (fairness across fast vs
+slow epochs, 20 min wall policy, fractional patience).
+
 Registry source of truth: `binary_optimizers/store/versions.py`.
 
 ## DuckDB
