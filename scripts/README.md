@@ -1,5 +1,9 @@
 # Scripts
 
+Helpers for **binary-optimizers**: fully binary/ternary latent-free training
+(discrete NN + discrete optimizer). See the root [README](../README.md) and
+[docs/PLAN.md](../docs/PLAN.md).
+
 ## `download_datasets.py`
 
 Downloads **MNIST** and/or **CIFAR-10** into a local directory (default `./data`).

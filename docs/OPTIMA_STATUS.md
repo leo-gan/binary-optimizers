@@ -1,8 +1,12 @@
-# Optima status (legacy runs; epoch-based protocol)
+# Optima status
 
-Snapshot of **parent** experiment results already on disk. These used epoch-based
+Context: the project goal is **fully binary/ternary training** (latent-free NN +
+discrete optimizer). These curves support representation laws under that constraint.
+See root [README.md](../README.md) and [PLAN.md](PLAN.md).
+
+Snapshot of **parent** experiment results already on disk. Many used epoch-based
 early stop (not pure wall). Use for scientific conclusions at sketch quality;
-re-runs under `*_1` ids + `pure_wall_budget_v1` would refine, not necessarily reverse.
+re-runs under `*_1` ids + `pure_wall_budget_v1` refine, not necessarily reverse.
 
 ## Register width (`v0_5_width_register`)
 
@@ -57,10 +61,20 @@ rank classes at healthy budgets.
 |----------|------------------------|--------|
 | A register n | **Yes** — n≈8 | No expand required |
 | A unary S | **Yes** — plateau 256–1024 | No expand required |
-| B encoding | **Yes** — fixed ≫ exp_mant | No expand required |
+| B encoding (MNIST) | **Yes** — fixed ≫ exp/mant | No expand required |
+| B on CIFAR (sparse v0_7) | **Yes** — fixed still wins (~0.51 best) | Optional stronger CIFAR net |
 
-Expand only for polish (register densify, n=32 rescue) or pure-wall re-runs of
-winners under `*_1` ids—not to “find” a missing peak.
+Expand only for polish (register densify, n=32 rescue, conv CIFAR) or pure-wall
+re-runs under `*_1` ids—not to "find" a missing peak.
+
+### CIFAR sparse (`v0_7_cifar_encoding`)
+
+| tag | best test |
+|-----|----------:|
+| **fixed_n8** | **0.5088** |
+| fixed_n16 | 0.4910 |
+| exp_mant2_n8 | 0.4409 |
+| exp_mant2_n16 | 0.4196 |
 
 ---
 

@@ -82,6 +82,15 @@ REGISTRY: dict[str, dict[str, Any]] = {
             "Comparison re-run: pure wall budget."
         ),
     },
+    "v0_7_cifar_encoding": {
+        "parent": "v0_6_encoding",
+        "code_dir": "experiments/v0_7_cifar_encoding",
+        "protocol": TRAIN_BUDGET_PROTOCOL,
+        "changelog": (
+            "WP3 sparse CIFAR-10: fixed vs exp_mant:2 at n=8,16; "
+            "flat MLP 3072→128→10; pure wall default 2400s."
+        ),
+    },
 }
 
 
