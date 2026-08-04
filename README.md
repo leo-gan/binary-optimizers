@@ -105,6 +105,7 @@ uv run pytest experiments/v0_1 experiments/v0_6_encoding experiments/v0_7_cifar_
 
 | Doc | Content |
 |------|---------|
+| **[docs/SWARM_OPTIMIZER.md](docs/SWARM_OPTIMIZER.md)** | **Swarm in depth:** terminology, codings, updates, trade-offs |
 | **[docs/PLAN.md](docs/PLAN.md)** | Living research roadmap and work packages |
 | **[docs/OPTIMA_STATUS.md](docs/OPTIMA_STATUS.md)** | Width / encoding / CIFAR sketch results |
 | **[docs/TRAIN_BUDGET.md](docs/TRAIN_BUDGET.md)** | Pure wall-clock train protocol |

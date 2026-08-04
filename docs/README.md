@@ -20,6 +20,7 @@ floating-point baselines.
 
 | Doc | Purpose |
 |-----|---------|
+| **[SWARM_OPTIMIZER.md](SWARM_OPTIMIZER.md)** | **Swarm optimizer:** terminology, codings, updates, trade-offs, reasonings |
 | [PLAN.md](PLAN.md) | Roadmap: existence proofs, WP1 width, WP2 encoding, WP3 scale |
 | [OPTIMA_STATUS.md](OPTIMA_STATUS.md) | Sketch optima (register \(n\), unary \(S\), encodings, CIFAR) |
 | [TRAIN_BUDGET.md](TRAIN_BUDGET.md) | Pure wall-clock train protocol (`pure_wall_budget_v1`) |

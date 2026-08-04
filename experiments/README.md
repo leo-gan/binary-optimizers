@@ -1,8 +1,9 @@
 # Experiments
 
 Research runs for **fully binary / ternary training**: discrete **networks** and
-discrete **optimizers** (latent-free). See the project [README](../README.md) and
-[docs/PLAN.md](../docs/PLAN.md).
+discrete **optimizers** (latent-free). See the project [README](../README.md),
+[docs/PLAN.md](../docs/PLAN.md), and the Swarm explainer
+[docs/SWARM_OPTIMIZER.md](../docs/SWARM_OPTIMIZER.md).
 
 ## Ladder
 
