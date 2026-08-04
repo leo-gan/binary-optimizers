@@ -1,13 +1,14 @@
 # Swarm / latent-free training — roadmap
 
 **Living plan** (originated on `plan/swarm-roadmap`; updated on feature branches as work lands)  
-**Last updated:** 2026-08-02 (WP1 width-atlas results; WP2 budgets revised)  
-**Status:** v0.1–v0.4 existence proofs; **WP1 width atlas done** (sketch laws on MNIST MLP);
-**next = WP2 encoding atlas** (`v0_6_encoding`)
+**Last updated:** 2026-08-04 (grand goal restated; WP1–WP2 done; WP3 CIFAR sparse)  
+**Status:** v0.1–v0.4 existence proofs; **WP1 + WP2 sketch done** on MNIST; **WP3 sparse**
+CIFAR encoding probe (`v0_7_cifar_encoding`) run — fixed still ranks above exp/mant.
 
-This document is the living plan for latent-free binary/ternary Swarm optimizers
-(BitNet-inspired layers, no FP master weights). Experiment folders use semantic
-minor versioning: `experiments/v0_N/` or `experiments/v0_N_<topic>/`.
+This document is the living plan for **fully binary / ternary training**: discrete
+**networks** and discrete **optimizers** (latent-free Swarm / register updates;
+BitNet-*inspired* layers, **no** FP master weights). Experiment folders use
+semantic minor versioning: `experiments/v0_N/` or `experiments/v0_N_<topic>/`.
 
 **Terminology (preferred):** use **weight** for one entry of a weight matrix (one
 learnable link between two units). Do **not** use “connection” for that idea.
@@ -18,32 +19,55 @@ standard BitNet jargon).
 
 ## 1. Goal (research claim)
 
-Train networks whose **weight state is discrete** (binary agents / bits / trits),
-updated by **Swarm rules** (votes, place-value registers, carry-safe ±Δ), so
-training does **not** keep a full-precision latent \(W\) (unlike BitNet QAT / STE).
+### Grand goal
+
+**Fully binary or fully ternary training** of neural nets:
+
+| Piece | Target |
+|-------|--------|
+| **NN** | Stored parameters are binary or ternary (bits / trits / ±1 agents)—not an FP master \(W\). |
+| **Optimizer** | Updates are discrete (flips, majority, place-value / carry-safe integer or trit steps)—not Adam/SGD on a latent FP copy of \(W\). |
+
+Together this is **latent-free** training: the discrete register *is* the weight.
+That is stricter than BitNet-style QAT / STE (FP master + discrete forward view).
+
+Autograd may still use floating-point *pressure* for STE-style paths; the **state we
+keep and step** is discrete. Longer term, more of the stack (acts, norms, backward)
+can go integer/binary; near term the non-negotiable is **discrete weights + discrete
+optimizer**.
+
+### Near-term research claim
+
+Discover **representation laws** (how wide the discrete state is; how it is encoded)
+so that fully binary/ternary optimizers and NNs train reliably—first on small vision
+toys, then at larger scale—without abandoning the latent-free constraint.
 
 ### 1.1 Research stance (current)
 
-We are exploring the **whole idea** of Swarm representations—not polishing a recipe.
+We are exploring the **whole idea** of Swarm / register representations—not polishing
+a floating-point recipe or STE leaderboards.
 
 | Do now | Do **not** prioritize now |
 |--------|---------------------------|
-| Change **how weights are represented** (encoding structure next; width sketch done) | Multi-seed error bars for ±0.5% claims |
-| Look for **generic rules** (like scaling laws: how optimum depends on model/data size) | Hyperparameter fine-tuning for small leaderboard gains |
-| Ask *what encoding structure works* (exponent vs mantissa) at WP1 budgets | Re-sweep every \(S\)/\(n\) or head-to-head STE for small gains |
-| Sparse scaling checks **after** encoding sketch | Exhaustive LayerNorm mode tables unless they change the representation story |
+| Keep **latent-free** discrete weights + discrete updates | Multi-seed error bars for ±0.5% claims |
+| Representation laws (width, encoding, whether optima **move** with scale) | Hyperparameter fine-tuning for small leaderboard gains |
+| Sparse scaling checks (CIFAR / deeper nets) under pure wall budgets | Head-to-head STE vs Swarm scoreboard optimization |
+| Document protocol / experiment version ids | Exhaustive LayerNorm tables unless they change the representation story |
 
 Baselines from v0.1–v0.4 are **reference points** (“this family can learn”), not a competition to shave points.
 
-| Claim | In scope today |
-|-------|----------------|
-| No FP master weight for linear layers | Yes (v0.1–v0.4) |
-| Discrete optimizer update (flips / integer Δ) | Yes |
-| Representation laws for swarm width & encoding | Width sketch **done** (WP1); encoding **next** (WP2) |
-| Bit-only backward / integer LayerNorm | **No** |
+| Claim | Status |
+|-------|--------|
+| No FP master weight for linear layers | **Yes** (v0.1–v0.4 ladder) |
+| Discrete optimizer update (flips / integer Δ) | **Yes** |
+| Representation laws for swarm width | **Sketch done** (WP1) |
+| Representation laws for encoding | **Sketch done** (WP2); CIFAR sparse (WP3) agrees fixed ≫ exp/mant |
+| Do optima move with data/model scale? | **In progress** (WP3 sparse; more scale later) |
+| Bit-only backward / integer LayerNorm | **Not yet** (grand goal extends here later) |
 | Trillion-param pretrain | **No** |
 
-Background notes: `docs/temp/research.md`, `docs/temp/deep-research-report.md`.
+Background notes: `docs/temp/research.md`, `docs/temp/deep-research-report.md`.  
+Project front page: root `README.md`.
 
 ---
 
@@ -458,34 +482,25 @@ Atlas default early-stop **patience=5** (ranking, not polish).
 **Deliverable:** curves + note — see `experiments/v0_5_NOTES.md`,
 `experiments/v0_5_width_*/`.
 
-### WP2 — Encoding atlas (Question B)  ← **start here**
+### WP2 — Encoding atlas (Question B)  ← **done (MNIST sketch)**
 
-| ID | Content |
-|----|---------|
-| `v0_6_encoding` | **Register scaffold**; fixed total \(n\) from WP1; compare fixed-point vs exp/mantissa vs block scale; unary \(S\approx 256\) as baseline only |
+| ID | Content | Status |
+|----|---------|--------|
+| `v0_6_encoding` | Fixed \(n\in\{8,16\}\); fixed-point vs exp/mant vs block scale; unary \(S=256\) baseline | **Done** — fixed-point wins; exp/mant worse with more \(n_e\) |
 
-**Budgets (locked from WP1, not re-swept inside structure cells):**
+**Deliverable:** ranking of encoding classes — see `experiments/v0_6_NOTES.md`,
+`docs/OPTIMA_STATUS.md`. Optional n=32 rescue still open.
 
-| \(n\) | Role |
-|------:|------|
-| **8** | Primary (register local optimum) |
-| **16** | Primary (still healthy fixed-point) |
-| **32** | Optional diagnostic (“rescue” wide fixed-point cliff) |
+### WP3 — Do the optima move? (scaling-style)  ← **sparse probe started**
 
-**Not the plan:** full encoding grids at every unary \(S\), or re-tuning lr per encoding.
-
-**Deliverable:** ranking of encoding classes; default split rule; unary baseline comparison;
-note on rescue at large \(n\) if probed.
-
-### WP3 — Do the optima move? (scaling-style)
-
-Repeat a **sparse** subset of WP1/WP2 on:
-
-- deeper / wider MLP, and/or  
-- CIFAR-scale vision toy  
+| ID | Content | Status |
+|----|---------|--------|
+| `v0_7_cifar_encoding` | CIFAR-10 flat MLP; fixed vs exp_mant:2 at \(n\in\{8,16\}\); pure wall 2400 s | **Done (sparse)** — ranking still fixed ≫ exp/mant |
+| Optional | Deeper / conv CIFAR; width re-check at scale | Open |
 
 Ask: does preferred width (\(n\approx 8\), \(S\approx 256\)) or preferred exp/mant split
-**shift** with scale?
+**shift** with scale? Sparse answer so far: **encoding ranking did not flip** on
+CIFAR flat MLP (absolute acc low; relative law holds).
 
 ### Explicitly deferred
 
@@ -503,26 +518,28 @@ Ask: does preferred width (\(n\approx 8\), \(S\approx 256\)) or preferred exp/ma
 |----|--------|--------|
 | `v0_5_width_unary` | Question A, unary family | Done (sketch) |
 | `v0_5_width_register` | Question A, carry-safe binary | Done (sketch) |
-| `v0_6_encoding` | Question B, exp vs mantissa structures | **Next** |
-| `v0_7_scale_shift` | Do optima move with model/data size? | After WP2 |
+| `v0_6_encoding` | Question B, exp vs mantissa (MNIST) | Done (sketch) |
+| `v0_7_cifar_encoding` | WP3 sparse fixed vs exp/mant on CIFAR | Done (sparse) |
+| Optional next | Stronger CIFAR net / deeper MLP; n=32 rescue; pure-wall full grids | Open |
 
-PROTOCOLS under `experiments/<id>/PROTOCOL.md`; notes in `experiments/v0_5_NOTES.md`
-(and later `v0_6_*`); log to DuckDB when useful.
+PROTOCOLS under `experiments/<id>/PROTOCOL.md`; notes in `experiments/v0_*_NOTES.md`;
+log to DuckDB (`binary_optimizers.store`) when useful. Protocol revs: see
+`docs/EXPERIMENT_VERSIONS.md`.
 
 ---
 
 ## 7. Recommended immediate action
 
-1. Keep this roadmap current when representation conclusions change.  
-2. ~~WP1 width atlas~~ **done** — register \(n\approx 8\), unary plateau \(S\approx 256\)–1024.  
-3. **Implement `v0_6_encoding` next:**  
-   - scaffold = **register / carry-safe** (v0.3 lineage);  
-   - lock \(n \in \{8, 16\}\) (+ optional 32 rescue);  
-   - vary **encoding class** only (fixed-point, exp/mant splits, block scale);  
-   - unary **\(S=256\)** once as baseline (not an encoding grid).  
-4. Optional polish: densify register \(n\in\{7,9,10,12\}\) with matched patience—only if
-   WP2 needs a sharper default \(n\).  
-5. Only after encoding curves exist: sparse WP3 scaling check (deeper net / CIFAR).
+1. Keep the **grand goal** front and center: fully binary/ternary **optimizer + NN**
+   (latent-free), not STE scoreboards.  
+2. ~~WP1 / WP2~~ **done** (MNIST sketches).  
+3. ~~WP3 sparse CIFAR encoding~~ **done** — ranking agrees with MNIST (fixed wins).  
+4. **Next research options** (pick by impact):  
+   - stronger CIFAR model (conv) still under latent-free register/encoding;  
+   - n=32 encoding rescue probe;  
+   - pure-wall full atlases under `*_1` experiment ids;  
+   - push the stack further toward integer/binary signals (longer-term grand goal).  
+5. Keep train protocol as **pure wall** by default (`docs/TRAIN_BUDGET.md`).
 
 **Default scaffold:** v0.3 carry-safe for register **and** encoding experiments;
 v0.1-style for pure swarm population size / unary baseline; v0.4 when ternary
