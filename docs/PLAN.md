@@ -69,6 +69,12 @@ Baselines from v0.1–v0.4 are **reference points** (“this family can learn”
 Background notes: `docs/temp/research.md`, `docs/temp/deep-research-report.md`.  
 Project front page: root `README.md`.
 
+**Unary Swarm (intended model, separate ladder):** frozen terms and experiment plan on
+branch `plan/unary-swarm` — see [UNARY_SWARM_TERMINOLOGY.md](UNARY_SWARM_TERMINOLOGY.md)
+and [UNARY_SWARM_EXPERIMENT_PLAN.md](UNARY_SWARM_EXPERIMENT_PLAN.md). That path uses
+sum→link value, per-link Adam/SGD, and XOR writeback; it is **not** the same as
+legacy `v0_1` majority+flip unary.
+
 ---
 
 ## 2. What is done

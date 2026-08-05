@@ -299,6 +299,10 @@ STE vs Swarm scoreboards.
 | Dynamic range | Limited by coding (\(n\), \(S\)) | Full float range |
 | Hardware story | Aligns with bit-serial / low-bit inference *if* train stays discrete | Train/infer mismatch common |
 
+**1B-parameter static budgets** (weights + grads + optimizer; no activations): see
+**[MEMORY_1B.md](MEMORY_1B.md)** — e.g. FP32+Adam ~16 GB, binary STE+SGD ~8 GB,
+packed binary Swarm \(n{=}8\) ~5 GB, packed ternary Swarm \(n{=}8\) ~6 GB.
+
 ### 8.2 Swarm vs STE (with master \(W\))
 
 | | Swarm | STE + master \(W\) |
