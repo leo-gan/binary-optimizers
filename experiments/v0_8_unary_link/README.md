@@ -27,6 +27,7 @@ python experiments/v0_8_unary_link/train.py --ln-mode none --seed 42
 | `layers.py` | `UnaryLinkLinear` — swarm buffer + encoders |
 | `optimizer.py` | `UnaryLinkOptimizer` — SGD/Adam + decode + XOR |
 | `model.py` | MNIST MLP |
+| `runner.py` | Shared `train_run` loop (used by v0.9–v0.12) |
 | `train.py` | CLI training |
 | `metrics.py` | swarm / link-value stats |
 | `test_v0_8_unary_link.py` | CI unit tests |
