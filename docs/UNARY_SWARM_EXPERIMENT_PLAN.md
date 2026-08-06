@@ -94,16 +94,18 @@ New code lives under a **new experiment id** (proposed: `v0_8_unary_link`), not 
 
 ## 4. Work packages
 
-### WP-U0 — Spec + scaffolding  ← **this branch / docs**
+### WP-U0 — Spec + scaffolding  ← **done**
 
 | Deliverable | Status |
 |-------------|--------|
 | Frozen terminology | **Done** — `docs/UNARY_SWARM_TERMINOLOGY.md` |
 | Experiment plan | **Done** — this file |
-| Memory context (1B static) | **Done** — `docs/MEMORY_1B.md` (baseline comparison; unary memory rows may need a follow-up for *this* optimizer state) |
-| Experiment folder skeleton | **Next** — `experiments/v0_8_unary_link/` (PROTOCOL, README, empty train stub optional) |
+| Memory context (1B static) | **Done** — `docs/MEMORY_1B.md` |
+| Experiment folder skeleton | **Done** — `experiments/v0_8_unary_link/` |
 
-### WP-U1 — Existence proof (MNIST, single cell)
+### WP-U1 — Existence proof (MNIST, single cell)  ← **implemented**
+
+**Code:** `experiments/v0_8_unary_link/` (`runner.py`, `train.py`, unit tests).
 
 **Goal:** one configuration that trains and is not a bug.
 
@@ -141,7 +143,9 @@ Minimal proposal to unblock code (can be replaced later without renaming terms):
 - Log mean \(|\Delta|\), mean flip fraction, train/test acc.  
 - Unit tests: encoder sum, XOR invertibility (double XOR = identity), swarm invariant.
 
-### WP-U2 — Decoder and optimizer ablations
+### WP-U2 — Decoder and optimizer ablations  ← **implemented**
+
+**Code:** `experiments/v0_9_unary_decoder/`.
 
 Fix net + \(S{=}256\) + encoder \(s/S\). Vary **only** one axis per grid.
 
@@ -154,7 +158,9 @@ Fix net + \(S{=}256\) + encoder \(s/S\). Vary **only** one axis per grid.
 
 **Acceptance:** ranking of optimizer/decoder classes + one **default recipe** for later width work.
 
-### WP-U3 — Swarm size atlas (Question A for *this* model)
+### WP-U3 — Swarm size atlas (Question A for *this* model)  ← **implemented**
+
+**Code:** `experiments/v0_10_unary_width/`.
 
 Vary \(S\) only under the WP-U2 default recipe:
 
@@ -167,7 +173,9 @@ tables with v0.1 without a clear label.)
 
 **Acceptance:** acc vs \(S\) curve + statement of plateau / peak for **this** Unary Swarm.
 
-### WP-U4 — Encoder family (still sum-only)
+### WP-U4 — Encoder family (still sum-only)  ← **implemented**
+
+**Code:** `experiments/v0_11_unary_encoder/`.
 
 Encoder input remains **scalar \(s\)**. Compare 1D maps:
 
@@ -180,13 +188,13 @@ Encoder input remains **scalar \(s\)**. Compare 1D maps:
 **Not** bitfield exp/mant. Optional: compare to legacy majority \(w=\mathrm{sign}(s)\) as a
 **baseline encoder** under the **same** XOR writeback (isolates encode vs update).
 
-### WP-U5 — Scale probe (later)
+### WP-U5 — Scale probe  ← **implemented (sparse harness)**
 
-Only after WP-U1–U3 defaults exist:
+**Code:** `experiments/v0_12_unary_cifar/` (CIFAR-10 flat MLP, \(S\in\{64,256,512\}\)).
 
-- Harder data (CIFAR flat MLP or small conv) under pure wall.  
+- Harder data under pure wall (default 2400 s).  
 - Ask: does preferred \(S\) move?  
-- Sparse, one seed, ranking not polish.
+- Sparse, one seed, ranking not polish. Full training runs are operator-triggered.
 
 ---
 
@@ -199,9 +207,10 @@ Only after WP-U1–U3 defaults exist:
 | `v0_9_unary_decoder` | WP-U2 ablations | `v0_8` |
 | `v0_10_unary_width` | WP-U3 \(S\) atlas | default recipe from U2 |
 | `v0_11_unary_encoder` | WP-U4 1D \(\mathrm{enc}(s)\) | default recipe |
+| `v0_12_unary_cifar` | WP-U5 CIFAR flat MLP probe | U1–U3 recipe |
 
 Paths: `experiments/<id>/` with `PROTOCOL.md`, `README.md`, `train.py`, `test_*.py`,
-results under `results/<id>/` (gitignored).
+results under `results/<id>/` (gitignored). Shared loop: `v0_8_unary_link/runner.py`.
 
 ---
 
@@ -297,3 +306,4 @@ lands (do not pretend moments are free).
 | Date | Change |
 |------|--------|
 | 2026-08-05 | Initial experiment plan on `plan/unary-swarm` |
+| 2026-08-05 | WP-U0–U5 code harnesses landed (`v0_8` … `v0_12`) |

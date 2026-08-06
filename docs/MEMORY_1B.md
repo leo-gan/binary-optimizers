@@ -24,6 +24,8 @@ this page isolates the **weight-path** story the Swarm design targets.
 | **Binary NN + STE + Adam** (BitNet-style QAT) | FP32 master; `sign` in forward | \(m, v\) FP32 | **16** | **16.0 GB** | 1.0× |
 | **Binary NN + Swarm** (register \(n{=}8\), packed) | 8 bits/weight | FP32 pressure EMA | **5** | **5.0 GB** | 0.31× |
 | **Ternary NN + Swarm** (register \(n{=}8\) trits, packed) | 16 bits/weight (2 b/trit) | FP32 pressure EMA | **6** | **6.0 GB** | 0.38× |
+| **Unary link Swarm** (\(S{=}256\), packed) + SGD | 256 bits/link | \(g\) only (no \(m,v\)) | **36** | **36.0 GB** | 2.25× |
+| **Unary link Swarm** (\(S{=}256\), packed) + Adam | 256 bits/link | \(g,m,v\) FP32 / link | **44** | **44.0 GB** | 2.75× |
 
 **Headline:** under the project’s STE baseline (SGD on latent \(W\)), binary STE
 cuts static memory ~2× vs FP32 Adam. Latent-free **Swarm** at the WP1 register

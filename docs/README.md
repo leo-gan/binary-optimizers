@@ -22,7 +22,7 @@ floating-point baselines.
 |-----|---------|
 | **[SWARM_OPTIMIZER.md](SWARM_OPTIMIZER.md)** | **Swarm optimizer:** terminology, codings, updates, trade-offs, reasonings |
 | **[UNARY_SWARM_TERMINOLOGY.md](UNARY_SWARM_TERMINOLOGY.md)** | **Frozen** Unary Swarm vocabulary (weight / swarm / link / link value; XOR path) |
-| **[UNARY_SWARM_EXPERIMENT_PLAN.md](UNARY_SWARM_EXPERIMENT_PLAN.md)** | Unary Swarm experiment ladder (WP-U0–U5, `v0_8+`) |
+| **[UNARY_SWARM_EXPERIMENT_PLAN.md](UNARY_SWARM_EXPERIMENT_PLAN.md)** | Unary Swarm experiment ladder (WP-U0–U5, `v0_8`…`v0_12`) |
 | [PLAN.md](PLAN.md) | Roadmap: existence proofs, WP1 width, WP2 encoding, WP3 scale |
 | [OPTIMA_STATUS.md](OPTIMA_STATUS.md) | Sketch optima (register \(n\), unary \(S\), encodings, CIFAR) |
 | **[MEMORY_1B.md](MEMORY_1B.md)** | Static training memory at **1B** params: FP / STE / binary Swarm / ternary Swarm |
