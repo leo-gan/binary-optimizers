@@ -103,9 +103,10 @@ New code lives under a **new experiment id** (proposed: `v0_8_unary_link`), not 
 | Memory context (1B static) | **Done** — `docs/MEMORY_1B.md` |
 | Experiment folder skeleton | **Done** — `experiments/v0_8_unary_link/` |
 
-### WP-U1 — Existence proof (MNIST, single cell)  ← **implemented**
+### WP-U1 — Existence proof (MNIST, single cell)  ← **implemented + run**
 
-**Code:** `experiments/v0_8_unary_link/` (`runner.py`, `train.py`, unit tests).
+**Code:** `experiments/v0_8_unary_link/` (`runner.py`, `train.py`, unit tests).  
+**Notes:** `experiments/v0_8_NOTES.md`. **Result:** best test **0.8988** (S=256 fixed sgd density).
 
 **Goal:** one configuration that trains and is not a bug.
 
@@ -143,9 +144,9 @@ Minimal proposal to unblock code (can be replaced later without renaming terms):
 - Log mean \(|\Delta|\), mean flip fraction, train/test acc.  
 - Unit tests: encoder sum, XOR invertibility (double XOR = identity), swarm invariant.
 
-### WP-U2 — Decoder and optimizer ablations  ← **implemented**
+### WP-U2 — Decoder and optimizer ablations  ← **implemented + run**
 
-**Code:** `experiments/v0_9_unary_decoder/`.
+**Code:** `experiments/v0_9_unary_decoder/`. **Notes:** `experiments/v0_9_NOTES.md`.
 
 Fix net + \(S{=}256\) + encoder \(s/S\). Vary **only** one axis per grid.
 
@@ -158,9 +159,12 @@ Fix net + \(S{=}256\) + encoder \(s/S\). Vary **only** one axis per grid.
 
 **Acceptance:** ranking of optimizer/decoder classes + one **default recipe** for later width work.
 
-### WP-U3 — Swarm size atlas (Question A for *this* model)  ← **implemented**
+**Result (seed 42, CPU):** **adam+density 0.9366** > sgd_m+density 0.9335 > sgd+density 0.8988.  
+**Locked recipe:** adam (lr=1e-3) + density + p_noise=0.001.
 
-**Code:** `experiments/v0_10_unary_width/`.
+### WP-U3 — Swarm size atlas (Question A for *this* model)  ← **implemented + run (sgd)**
+
+**Code:** `experiments/v0_10_unary_width/`. **Notes:** `experiments/v0_10_NOTES.md`.
 
 Vary \(S\) only under the WP-U2 default recipe:
 
@@ -173,9 +177,12 @@ tables with v0.1 without a clear label.)
 
 **Acceptance:** acc vs \(S\) curve + statement of plateau / peak for **this** Unary Swarm.
 
-### WP-U4 — Encoder family (still sum-only)  ← **implemented**
+**Result (seed 42, sgd+density — pre-adam lock):** nearly flat **~0.89–0.90**; peak sample
+**S=128 @ 0.9000**. Large S does not help; S=1024 wall-starved.
 
-**Code:** `experiments/v0_11_unary_encoder/`.
+### WP-U4 — Encoder family (still sum-only)  ← **implemented + run (sgd)**
+
+**Code:** `experiments/v0_11_unary_encoder/`. **Notes:** `experiments/v0_11_NOTES.md`.
 
 Encoder input remains **scalar \(s\)**. Compare 1D maps:
 
@@ -188,13 +195,19 @@ Encoder input remains **scalar \(s\)**. Compare 1D maps:
 **Not** bitfield exp/mant. Optional: compare to legacy majority \(w=\mathrm{sign}(s)\) as a
 **baseline encoder** under the **same** XOR writeback (isolates encode vs update).
 
-### WP-U5 — Scale probe  ← **implemented (sparse harness)**
+**Result (seed 42, S=256, sgd):** **majority 0.9377** > signed_sqrt 0.9122 > tanh 0.9115 >
+fixed 0.8988.
 
-**Code:** `experiments/v0_12_unary_cifar/` (CIFAR-10 flat MLP, \(S\in\{64,256,512\}\)).
+### WP-U5 — Scale probe  ← **implemented + run (budget-confounded)**
+
+**Code:** `experiments/v0_12_unary_cifar/`. **Notes:** `experiments/v0_12_NOTES.md`.
 
 - Harder data under pure wall (default 2400 s).  
 - Ask: does preferred \(S\) move?  
-- Sparse, one seed, ranking not polish. Full training runs are operator-triggered.
+- Sparse, one seed, ranking not polish.
+
+**Result (seed 42, sgd+fixed):** S=64 **0.3813** > S=256 0.3691 > S=512 0.3455.
+Large-S cells hit max wall with few epochs — ranking confounded by budget.
 
 ---
 
@@ -307,3 +320,4 @@ lands (do not pretend moments are free).
 |------|--------|
 | 2026-08-05 | Initial experiment plan on `plan/unary-swarm` |
 | 2026-08-05 | WP-U0–U5 code harnesses landed (`v0_8` … `v0_12`) |
+| 2026-08-06 | CPU pure-wall ladder finished; notes in `experiments/v0_*_NOTES.md` and `experiments/UNARY_LADDER_RESULTS.md` |

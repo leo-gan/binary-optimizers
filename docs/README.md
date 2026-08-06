@@ -53,6 +53,7 @@ These inform STE / voting baselines; the **latent-free Swarm ladder** lives unde
 | `experiments/v0_6_encoding` | WP2 encoding atlas (MNIST) |
 | `experiments/v0_7_cifar_encoding` | WP3 sparse fixed vs exp/mant on CIFAR-10 |
 | `experiments/v0_8_unary_link` … `v0_12_unary_cifar` | **Unary link Swarm** ladder (sum→link value, XOR writeback) |
+| `experiments/UNARY_LADDER_RESULTS.md` | Consolidated CPU pure-wall ladder results (2026-08-06) |
 | `experiments/ste_vs_swarm` | Optional STE vs Swarm harness (not the main goal) |
 
 Each folder has `PROTOCOL.md` / `README.md`. Notes: `experiments/v0_5_NOTES.md`,
