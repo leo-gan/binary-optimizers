@@ -91,6 +91,47 @@ REGISTRY: dict[str, dict[str, Any]] = {
             "flat MLP 3072→128→10; pure wall default 2400s."
         ),
     },
+    "v0_8_unary_link": {
+        "parent": "v0_8_unary_link",
+        "code_dir": "experiments/v0_8_unary_link",
+        "protocol": TRAIN_BUDGET_PROTOCOL,
+        "changelog": (
+            "Unary link Swarm: sum encoder → link value; per-link SGD/Adam; "
+            "directional density decoder + XOR writeback (WP-U1)."
+        ),
+    },
+    "v0_9_unary_decoder": {
+        "parent": "v0_8_unary_link",
+        "code_dir": "experiments/v0_9_unary_decoder",
+        "protocol": TRAIN_BUDGET_PROTOCOL,
+        "changelog": (
+            "WP-U2: sparse optimizer × decoder × noise ablations on Unary link Swarm."
+        ),
+    },
+    "v0_10_unary_width": {
+        "parent": "v0_8_unary_link",
+        "code_dir": "experiments/v0_10_unary_width",
+        "protocol": TRAIN_BUDGET_PROTOCOL,
+        "changelog": (
+            "WP-U3: swarm size S atlas for Unary link Swarm (XOR path)."
+        ),
+    },
+    "v0_11_unary_encoder": {
+        "parent": "v0_8_unary_link",
+        "code_dir": "experiments/v0_11_unary_encoder",
+        "protocol": TRAIN_BUDGET_PROTOCOL,
+        "changelog": (
+            "WP-U4: sum-only encoder family (fixed/tanh/signed_sqrt/majority)."
+        ),
+    },
+    "v0_12_unary_cifar": {
+        "parent": "v0_8_unary_link",
+        "code_dir": "experiments/v0_12_unary_cifar",
+        "protocol": TRAIN_BUDGET_PROTOCOL,
+        "changelog": (
+            "WP-U5: sparse CIFAR-10 flat MLP scale probe for Unary link Swarm."
+        ),
+    },
 }
 
 

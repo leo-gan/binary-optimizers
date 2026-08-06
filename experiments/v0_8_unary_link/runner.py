@@ -213,40 +213,6 @@ def train_run(
     with open(json_path, "w") as f:
         json.dump(out, f, indent=2)
 
-    cfg = enrich_config(
-        experiment_id,
-        {
-            "run_tag": run_tag,
-            "hidden": hidden,
-            "swarm_size": swarm_size,
-            "encoder": encoder,
-            "opt": opt_name,
-            "lr": lr,
-            "decoder": decoder,
-            "alpha": alpha,
-            "p_max": p_max,
-            "p_noise": p_noise,
-            "ln_mode": ln_mode,
-            "budget": budget.to_dict(),
-        },
-    )
-    rid = soft_record_completed_run(
-        experiment=experiment_id,
-        name=safe_tag,
-        config=cfg,
-        history=history,
-        seed=seed,
-        wall_sec=out["wall_sec"],
-        best_test_acc=out["best_test_acc"],
-        best_epoch=out["best_epoch"],
-        final_test_acc=final_test_acc,
-        final_test_loss=final_test_loss,
-        summary={"epochs_ran": len(history), "source_json": str(json_path)},
-        notes=db_notes(experiment_id),
-    )
-    if rid:
-        out["run_id"] = rid
-
     ckpt_dir = REPO_ROOT / "checkpoints" / experiment_id
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     ckpt_path = ckpt_dir / f"{safe_tag}_seed{seed}.pt"
@@ -260,4 +226,45 @@ def train_run(
     out["json_path"] = str(json_path)
     out["ckpt_path"] = str(ckpt_path)
     print(f"Saved {json_path}", flush=True)
+    print(f"Saved {ckpt_path}", flush=True)
+
+    # Optional DuckDB — never fail the run if registry/DB has issues.
+    try:
+        cfg = enrich_config(
+            experiment_id,
+            {
+                "run_tag": run_tag,
+                "hidden": hidden,
+                "swarm_size": swarm_size,
+                "encoder": encoder,
+                "opt": opt_name,
+                "lr": lr,
+                "decoder": decoder,
+                "alpha": alpha,
+                "p_max": p_max,
+                "p_noise": p_noise,
+                "ln_mode": ln_mode,
+                "budget": budget.to_dict(),
+            },
+        )
+        rid = soft_record_completed_run(
+            experiment=experiment_id,
+            name=safe_tag,
+            config=cfg,
+            history=history,
+            seed=seed,
+            wall_sec=out["wall_sec"],
+            best_test_acc=out["best_test_acc"],
+            best_epoch=out["best_epoch"],
+            final_test_acc=final_test_acc,
+            final_test_loss=final_test_loss,
+            summary={"epochs_ran": len(history), "source_json": str(json_path)},
+            notes=db_notes(experiment_id),
+        )
+        if rid:
+            out["run_id"] = rid
+            print(f"Stored run_id={rid} experiment={experiment_id}", flush=True)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Warning: DuckDB record skipped: {exc}", flush=True)
+
     return out
