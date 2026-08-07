@@ -24,5 +24,6 @@ dist/
 # Local experiment artifacts (optional large outputs)
 checkpoints/
 results/
+logs/
 *.duckdb
 *.duckdb.wal
