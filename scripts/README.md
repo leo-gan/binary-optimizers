@@ -83,3 +83,18 @@ Swarm−STE deltas, per-run detail). Equivalent to:
 ```
 
 If the section is empty, train first with `./scripts/run_ste_vs_swarm.sh`.
+## `run_unary_ladder.sh` / `watch_unary_ladder.sh`
+
+Sequential **Unary link Swarm** atlas (WP-U2 → U5): decoder ablations, width,
+encoder family, CIFAR probe. Writes train stdout under gitignored `logs/`.
+
+```bash
+# Full ladder (long on CPU; override device with DEVICE=cuda)
+bash scripts/run_unary_ladder.sh
+
+# Optional: Grok monitor watcher (prints DONE or FAILED once)
+bash scripts/watch_unary_ladder.sh
+```
+
+Results: `results/v0_9_*` … `v0_12_*` (gitignored). Notes:
+`experiments/UNARY_LADDER_RESULTS.md`.
