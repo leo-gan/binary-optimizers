@@ -106,8 +106,11 @@ uv run pytest experiments/v0_1 experiments/v0_6_encoding experiments/v0_7_cifar_
 | Doc | Content |
 |------|---------|
 | **[docs/SWARM_OPTIMIZER.md](docs/SWARM_OPTIMIZER.md)** | **Swarm in depth:** terminology, codings, updates, trade-offs |
+| **[docs/UNARY_SWARM_TERMINOLOGY.md](docs/UNARY_SWARM_TERMINOLOGY.md)** | Frozen Unary Swarm terms (weight / swarm / link / XOR path) |
+| **[docs/UNARY_SWARM_EXPERIMENT_PLAN.md](docs/UNARY_SWARM_EXPERIMENT_PLAN.md)** | Unary Swarm experiment plan (WP-U0–U5) |
 | **[docs/PLAN.md](docs/PLAN.md)** | Living research roadmap and work packages |
 | **[docs/OPTIMA_STATUS.md](docs/OPTIMA_STATUS.md)** | Width / encoding / CIFAR sketch results |
+| **[docs/MEMORY_1B.md](docs/MEMORY_1B.md)** | Static training memory @ 1B params (FP / STE / Swarm) |
 | **[docs/TRAIN_BUDGET.md](docs/TRAIN_BUDGET.md)** | Pure wall-clock train protocol |
 | **[docs/EXPERIMENT_VERSIONS.md](docs/EXPERIMENT_VERSIONS.md)** | Run IDs vs protocol revs (e.g. `v0_2` → `v0_2_1`) |
 | [docs/README.md](docs/README.md) | Doc index (incl. older optimizer notes) |
