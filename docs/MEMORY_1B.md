@@ -1,40 +1,86 @@
 # Training memory at 1B parameters
 
-**Purpose:** static (parameter + optimizer + gradient) memory for a **1 billion**
-logical-weight model under four regimes that matter to this project.
+**Purpose:** static (parameter + optimizer + gradient) memory for **1 billion**
+scale under regimes that matter to this project.
 
 **Scope:** weight storage, optimizer state, and resident gradients.  
 **Out of scope:** activations, KV cache, dataloader, CUDA workspace, and
 communication buffers. Those often dominate wall-clock peak RAM at LLM scale;
 this page isolates the **weight-path** story the Swarm design targets.
 
-**Notation:** \(N = 10^9\) logical weights.  
-**Units:** GiB = \(2^{30}\) bytes ≈ 1.074 GB (decimal). Tables use **GB** as
-\(N \times\) (bytes per weight) / \(10^9\), so 1 byte/param → **1.0 GB** at 1B params
-(close enough for design comparisons; multiply by \(1.074\) for strict GiB).
+**Units:** tables use **GB** as \(10^9\) bytes-scale decimal
+(\(N \times\) bytes-per-unit / \(10^9\)). Multiply by \(1.074\) for GiB.
+
+### Counting convention (read first)
+
+| Regime | What “1B” means here | Unit |
+|--------|----------------------|------|
+| All FP, STE, **register** Swarm | \(N_{\mathrm{link}} = 10^9\) matrix entries | One **link** ≈ one classical parameter |
+| **Unary link Swarm** (this design) | \(N_{\mathrm{w}} = 10^9\) **weights** | One **weight** = **one bit** in a swarm ([terminology](UNARY_SWARM_TERMINOLOGY.md)) |
+
+**Yes — for Unary Swarm, one swarm bit = one weight is the correct interpretation**
+under the frozen glossary. Optimizer state (\(g, m, v\)) still attaches **per link**,
+not per bit, so:
+
+\[
+N_{\mathrm{link}} = N_{\mathrm{w}} / S,\qquad
+\text{swarm bits} = N_{\mathrm{w}} = S \cdot N_{\mathrm{link}}.
+\]
+
+The old mistake of “1B links × \(S{=}256\) bits” inflates memory by \(S\) and is
+**not** used for Unary rows below.
 
 ---
 
-## 1. Summary table (1B parameters)
+## 1. Summary table
 
-| Case | Weight path | Optimizer path | Bytes / logical weight | **Static total @ 1B** | vs all-FP Adam |
-|------|-------------|----------------|------------------------:|----------------------:|---------------:|
+### 1.1 Classical 1B **links** (FP / STE / register Swarm)
+
+| Case | Weight path | Optimizer path | Bytes / link | **Static @ \(10^9\) links** | vs FP32 Adam |
+|------|-------------|----------------|-------------:|----------------------------:|-------------:|
 | **All FP** (FP32 + Adam) | FP32 \(W\) | \(m, v\) FP32 | **16** | **16.0 GB** | 1.0× |
-| **Binary NN + STE** (project: SGD) | FP32 master; `sign` in forward | none (SGD) | **8** | **8.0 GB** | 0.50× |
-| **Binary NN + STE + Adam** (BitNet-style QAT) | FP32 master; `sign` in forward | \(m, v\) FP32 | **16** | **16.0 GB** | 1.0× |
-| **Binary NN + Swarm** (register \(n{=}8\), packed) | 8 bits/weight | FP32 pressure EMA | **5** | **5.0 GB** | 0.31× |
-| **Ternary NN + Swarm** (register \(n{=}8\) trits, packed) | 16 bits/weight (2 b/trit) | FP32 pressure EMA | **6** | **6.0 GB** | 0.38× |
-| **Unary link Swarm** (\(S{=}256\), packed) + SGD | 256 bits/link | \(g\) only (no \(m,v\)) | **36** | **36.0 GB** | 2.25× |
-| **Unary link Swarm** (\(S{=}256\), packed) + Adam | 256 bits/link | \(g,m,v\) FP32 / link | **44** | **44.0 GB** | 2.75× |
+| **Binary NN + STE** (SGD) | FP32 master; `sign` forward | none | **8** | **8.0 GB** | 0.50× |
+| **Binary NN + STE + Adam** | FP32 master | \(m, v\) FP32 | **16** | **16.0 GB** | 1.0× |
+| **Binary register Swarm** (\(n{=}8\), packed) | 8 bits/link | FP32 pressure EMA | **5** | **5.0 GB** | 0.31× |
+| **Ternary register Swarm** (\(n{=}8\), packed) | 16 bits/link (2 b/trit) | FP32 pressure EMA | **6** | **6.0 GB** | 0.38× |
 
-**Headline:** under the project’s STE baseline (SGD on latent \(W\)), binary STE
-cuts static memory ~2× vs FP32 Adam. Latent-free **Swarm** at the WP1 register
-optimum (\(n \approx 8\)) cuts static memory ~3× vs FP32 Adam and ~1.6× vs STE+SGD,
-because there is **no FP master \(W\)** and **no Adam moments**—only discrete digits
-plus one FP EMA of pressure per logical weight.
+### 1.2 Unary link Swarm — 1B **weights (bits)**
 
-If STE is paired with **Adam** (common in BitNet QAT writeups), binary *forward*
-does **not** reduce training memory vs all-FP Adam: the master + moments still dominate.
+Packed bits; \(g,m,v\) FP32 **per link**; \(S\) = swarm size.
+
+**Bytes per weight (bit):**
+
+\[
+b_{\mathrm{SGD}} = \frac{1}{8} + \frac{4}{S},\qquad
+b_{\mathrm{Adam}} = \frac{1}{8} + \frac{12}{S}
+\]
+
+(1/8 B for the packed bit; 4 B of \(g\) amortized over \(S\) bits; Adam adds \(m,v\) → 12 B / link / \(S\).)
+
+| Case | \(S\) | Bytes / weight (bit) | **Static @ \(10^9\) bits** | vs FP32 Adam @ 1B **links** |
+|------|------:|---------------------:|---------------------------:|----------------------------:|
+| **Unary + SGD** | 128 | \(0.125+0.03125=0.156\) | **0.156 GB** | ~100× smaller (different unit) |
+| **Unary + SGD** | **256** | \(0.125+0.0156=0.141\) | **0.141 GB** | — |
+| **Unary + Adam** | 128 | \(0.125+0.0938=0.219\) | **0.219 GB** | — |
+| **Unary + Adam** | **256** | \(0.125+0.0469=0.172\) | **0.172 GB** | — |
+
+**Fair “same network topology” comparison:** if the FP net has \(N_{\mathrm{link}}\) links,
+Unary uses \(N_{\mathrm{w}} = S \cdot N_{\mathrm{link}}\) bit-weights. At \(S{=}256\) and
+\(N_{\mathrm{link}}=10^9\):
+
+| Case | Formula | Total |
+|------|---------|------:|
+| FP32 + Adam | \(10^9 \times 16\) | **16.0 GB** |
+| Unary + SGD | \(10^9 \times (S/8 + 4) = 10^9 \times 36\) | **36.0 GB** |
+| Unary + Adam | \(10^9 \times (S/8 + 12) = 10^9 \times 44\) | **44.0 GB** |
+
+So: **per bit** Unary is tiny (~0.14–0.17 GB at 1B bits); **per link** at fixed topology
+and \(S{=}256\) it is **heavier** than FP32 Adam because each link stores 256 bits + FP
+optimizer on the link value. Do not mix the two headlines.
+
+**Headline (Unary terms):** with **weight = bit**, 1B-weight Unary training static state
+is **≪ 1 GB** at \(S \ge 32\) (SGD or Adam), because bits pack 8:1 and \(g/m/v\) amortize
+across the swarm.
 
 ---
 
@@ -56,10 +102,11 @@ does **not** reduce training memory vs all-FP Adam: the master + moments still d
 |--------|-------------------|--------|
 | Register width \(n_{\mathrm{bits}}\) | **8** | WP1 peak (`v0_5_width_register`, `docs/OPTIMA_STATUS.md`) |
 | Ternary width \(n_{\mathrm{trits}}\) | **8** | Same budget as binary peak for fair comparison (v0.4 default was 10; see §5) |
-| Unary population \(S\) | **32** (optional row) | Historical “match one FP32 word”; WP1 plateau is \(S \approx 256\) |
-| STE optimizer | **SGD + clamp** (no momentum) | `docs/optimizers.md`, STE baseline spirit |
-| Swarm optimizer state | **One FP32 pressure EMA per logical weight** | `SwarmOptimizerV0{1,3,4}` |
-| Packing | **Ideal packed** bits/trits for production claims | Research code stores **int8** agents today (§6) |
+| Unary swarm size \(S\) | **256** (default); also **128** (U3 peak under sgd) | [UNARY_SWARM_TERMINOLOGY.md](UNARY_SWARM_TERMINOLOGY.md), ladder notes |
+| Unary optimizer | **SGD** or **Adam per link** on link value | `UnaryLinkOptimizer` (`v0_8`); U2 prefers Adam |
+| Register Swarm optimizer | **One FP32 pressure EMA per link** | `SwarmOptimizerV0{1,3,4}` (legacy unary flip path) |
+| STE optimizer | **SGD + clamp** (no momentum) | `docs/optimizers.md` |
+| Packing | **Ideal packed** bits for production claims | Research code stores **int8** swarm today (§6) |
 
 ### 2.3 “All FP” definition
 
@@ -206,27 +253,6 @@ M_{\mathrm{static}} \approx N \times 5 = \mathbf{5.0~\mathrm{GB}}
 **vs all-FP Adam:** ~0.31× (≈ **3.2× smaller**).  
 **vs STE+SGD:** ~0.63× (≈ **1.6× smaller**).
 
-#### Optional — unary Swarm, \(S = 32\) agents (packed)
-
-Historical “one FP32 word of agents” design:
-
-| Component | Bytes / weight |
-|-----------|---------------:|
-| Agents \(S{=}32\) packed | 4 |
-| Pressure EMA FP32 | 4 |
-| **Total** | **8** → **8.0 GB @ 1B** |
-
-WP1 prefers larger \(S\) for accuracy (\(S \approx 256\)):
-
-| \(S\) | Packed agents | + EMA | Total B/wt | @ 1B |
-|------:|--------------:|------:|-----------:|-----:|
-| 32 | 4 | 4 | 8 | 8.0 GB |
-| 256 | 32 | 4 | 36 | 36.0 GB |
-| 1024 | 128 | 4 | 132 | 132 GB |
-
-Unary at the accuracy plateau is **memory-heavy**. Register \(n{=}8\) is the
-memory-efficient binary Swarm default for scaling arguments.
-
 #### Peak / implementation note (STE float view)
 
 Research layers build a float view of the population for manual STE
@@ -282,20 +308,92 @@ if ideal coding were free.
 
 ---
 
-## 4. Side-by-side at 1B (stacked bars in numbers)
+### 3.5 Unary link Swarm (weight = bit) — SGD vs Adam
+
+Terms: [UNARY_SWARM_TERMINOLOGY.md](UNARY_SWARM_TERMINOLOGY.md).  
+Implementation: `experiments/v0_8_unary_link/` (`UnaryLinkOptimizer`).
+
+#### Storage model
+
+| Object | Count | Storage (production packing) |
+|--------|------:|------------------------------|
+| **Weight** | \(N_{\mathrm{w}}\) | 1 bit each → \(N_{\mathrm{w}}/8\) bytes |
+| **Link** | \(N_{\mathrm{w}}/S\) | owns one swarm of \(S\) weights |
+| **Link value** \(w_{\mathrm{link}}\) | \(N_{\mathrm{w}}/S\) | not stored; re-encoded from swarm |
+| Grad \(g = \partial L/\partial w_{\mathrm{link}}\) | \(N_{\mathrm{w}}/S\) | FP32 → 4 B / link |
+| Momentum \(m\) (SGD-M or Adam) | \(N_{\mathrm{w}}/S\) | FP32 → 4 B / link |
+| Second moment \(v\) (Adam only) | \(N_{\mathrm{w}}/S\) | FP32 → 4 B / link |
+
+No FP master weight matrix. Continuous optimizer lives on **link values** only.
+
+#### Totals at \(N_{\mathrm{w}} = 10^9\) bit-weights
+
+| Optimizer | Formula (bytes) | \(S{=}128\) | \(S{=}256\) | \(S{=}512\) |
+|-----------|-----------------|------------:|------------:|------------:|
+| **SGD** (only \(g\)) | \(N_{\mathrm{w}}/8 + 4 N_{\mathrm{w}}/S\) | **0.156 GB** | **0.141 GB** | **0.133 GB** |
+| **SGD + momentum** | \(N_{\mathrm{w}}/8 + 8 N_{\mathrm{w}}/S\) | 0.188 GB | 0.156 GB | 0.141 GB |
+| **Adam** (\(g,m,v\)) | \(N_{\mathrm{w}}/8 + 12 N_{\mathrm{w}}/S\) | **0.219 GB** | **0.172 GB** | **0.148 GB** |
+
+Worked example **\(S{=}256\)** (plan default / U1 cell):
+
+| Buffer | Count | Bytes |
+|--------|------:|------:|
+| Packed swarm | \(10^9\) bits | \(10^9/8 = 1.25\times 10^8\) (**0.125 GB**) |
+| \(g\) | \(10^9/256\) links | \(4 \times 3.906\times 10^6\) (**0.0156 GB**) |
+| \(m,v\) (Adam) | same | **0.0313 GB** |
+| **SGD total** | | **0.141 GB** |
+| **Adam total** | | **0.172 GB** |
+
+Adam costs only **~0.031 GB** extra vs SGD at this scale (moments are few because
+there are only \(N_{\mathrm{w}}/S\) links). Larger \(S\) → **fewer links** → **cheaper**
+\(g,m,v\); swarm storage stays \(N_{\mathrm{w}}/8\) when bit count is fixed.
+
+#### Same-topology view (1B **links**, each with swarm size \(S\))
+
+Here \(N_{\mathrm{w}} = S \cdot 10^9\). Swarm alone is \(S/8\) GB; plus optimizer:
+
+| \(S\) | Swarm | + SGD (\(g\)) | + Adam (\(g,m,v\)) |
+|------:|------:|--------------:|-------------------:|
+| 32 | 4.0 GB | **8.0 GB** | **16.0 GB** |
+| 128 | 16.0 GB | **20.0 GB** | **28.0 GB** |
+| 256 | 32.0 GB | **36.0 GB** | **44.0 GB** |
+| 512 | 64.0 GB | **68.0 GB** | **76.0 GB** |
+
+At fixed topology, big \(S\) is **memory-heavy**. That is the right table for
+“replace every FP parameter by a swarm of size \(S\).”
+
+#### Research code (int8, not packed)
+
+Today each weight is **int8** → \(N_{\mathrm{w}}\) bytes for the swarm alone
+(**1.0 GB** at 1B bits) before \(g,m,v\). Packed claims above are architectural.
+
+---
+
+## 4. Side-by-side
+
+### 4.1 Classical: 1B **links**
 
 ```
-All FP (FP32+Adam)     |################  16.0 GB
-Binary STE + Adam      |################  16.0 GB   (no win vs Adam)
-Binary STE + SGD       |########          8.0 GB
-Unary Swarm S=32       |########          8.0 GB   (packed)
-Ternary Swarm n=8      |######            6.0 GB   (packed)
-Binary Swarm n=8       |#####             5.0 GB   (packed)  ← WP1 default
+All FP (FP32+Adam)          |################  16.0 GB
+Binary STE + Adam           |################  16.0 GB
+Binary STE + SGD            |########          8.0 GB
+Unary S=256 + Adam (1B links)|############################################  44.0 GB
+Unary S=256 + SGD  (1B links)|####################################  36.0 GB
+Ternary register n=8        |######            6.0 GB
+Binary register n=8         |#####             5.0 GB
 ```
 
-**Interpretation for the grand goal**
+### 4.2 Unary terms: 1B **weights (bits)**, \(S{=}256\)
 
-1. **Binary forward + STE + Adam** does not unlock 1B training memory; masters and
+```
+Unary + Adam  |##  0.172 GB
+Unary + SGD   |#   0.141 GB
+(swarm alone) |#   0.125 GB
+```
+
+**Interpretation**
+
+1. **Binary forward + STE + Adam** does not unlock 1B-**link** training memory; masters and
    moments still own the budget.  
 2. **STE + SGD** helps (drops Adam), but still stores an FP master.  
 3. **Latent-free Swarm** removes the master; static cost is **discrete width + one
@@ -362,19 +460,27 @@ bit packing as later engineering.
 
 ## 7. Worked totals (copy-paste)
 
-\(N = 10^9\).
+### 7.1 \(N = 10^9\) **links** (classical parameter count)
 
 | Case | Formula (bytes) | Total |
 |------|-----------------|------:|
 | All FP32 + Adam | \(N(4+4+4+4)\) | **16.0 GB** |
 | Binary STE + SGD | \(N(4+4)\) | **8.0 GB** |
 | Binary STE + Adam | \(N(4+4+4+4)\) | **16.0 GB** |
-| Binary Swarm \(n{=}8\) packed | \(N(1+4)\) | **5.0 GB** |
-| Binary Swarm \(n{=}8\) int8 research | \(N(8+4)\) | **12.0 GB** |
-| Unary Swarm \(S{=}32\) packed | \(N(4+4)\) | **8.0 GB** |
-| Unary Swarm \(S{=}256\) packed | \(N(32+4)\) | **36.0 GB** |
-| Ternary Swarm \(n{=}8\) packed | \(N(2+4)\) | **6.0 GB** |
-| Ternary Swarm \(n{=}10\) packed | \(N(2.5+4)\) | **6.5 GB** |
+| Binary register Swarm \(n{=}8\) packed | \(N(1+4)\) | **5.0 GB** |
+| Binary register Swarm \(n{=}8\) int8 | \(N(8+4)\) | **12.0 GB** |
+| Ternary register Swarm \(n{=}8\) packed | \(N(2+4)\) | **6.0 GB** |
+| Unary link Swarm \(S{=}256\) + SGD | \(N(S/8 + 4)=N\cdot 36\) | **36.0 GB** |
+| Unary link Swarm \(S{=}256\) + Adam | \(N(S/8 + 12)=N\cdot 44\) | **44.0 GB** |
+
+### 7.2 \(N_{\mathrm{w}} = 10^9\) **weights (bits)** — Unary only
+
+| Case | Formula (bytes) | Total |
+|------|-----------------|------:|
+| Unary + SGD, any \(S\) | \(N_{\mathrm{w}}/8 + 4 N_{\mathrm{w}}/S\) | see §3.5 |
+| Unary + Adam, \(S{=}256\) | \(10^9/8 + 12\cdot 10^9/256\) | **0.172 GB** |
+| Unary + SGD, \(S{=}256\) | \(10^9/8 + 4\cdot 10^9/256\) | **0.141 GB** |
+| Swarm bits only (packed) | \(N_{\mathrm{w}}/8\) | **0.125 GB** |
 
 ---
 
@@ -385,7 +491,9 @@ bit packing as later engineering.
 - **Packed Swarm totals as current measured GPU use** — false until packing ships.  
 - **Activation-free totals as full training RAM** — false for transformers; always
   state that this page is **weight-path static** memory.  
-- **Unary \(S{=}256\) as “small memory”** — accuracy plateau, not a memory win.
+- **Mix bit-count and link-count** — “Unary is 0.14 GB at 1B” (bits) is compatible with
+  “Unary is 36 GB at 1B links with \(S{=}256\)”; they answer different questions.  
+- **Unary \(S{=}256\) is free on a fixed topology** — each link pays \(S\) bits.
 
 ---
 
@@ -395,6 +503,8 @@ bit packing as later engineering.
 |-----|------|
 | [PLAN.md](PLAN.md) | Grand goal; WP1 width optima used here |
 | [OPTIMA_STATUS.md](OPTIMA_STATUS.md) | \(n \approx 8\), \(S \approx 256\)–1024 |
+| [UNARY_SWARM_TERMINOLOGY.md](UNARY_SWARM_TERMINOLOGY.md) | **Weight = bit**; link; link value |
+| [UNARY_SWARM_EXPERIMENT_PLAN.md](UNARY_SWARM_EXPERIMENT_PLAN.md) | Unary ladder (v0_8+) |
 | [SWARM_OPTIMIZER.md](SWARM_OPTIMIZER.md) | Latent-free vs STE master \(W\) |
 | [optimizers.md](optimizers.md) | STE = SGD + clamp historical note |
 | [TRAIN_BUDGET.md](TRAIN_BUDGET.md) | Wall-clock train protocol (orthogonal to RAM model) |
@@ -407,3 +517,4 @@ bit packing as later engineering.
 |------|--------|
 | 2026-08-05 | Initial 1B static memory comparison for FP / STE / binary Swarm / ternary Swarm |
 | 2026-08-05 | §2.4: IEEE FP16 vs **BF16** (FP32 exp) vs WP2 exp/mant vs ExpFP |
+| 2026-08-07 | Unary: weight=bit counting; SGD vs Adam @ 1B bits; dual tables (bits vs links) |
