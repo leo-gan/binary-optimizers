@@ -30,6 +30,7 @@ Hidden-activation norm (after the first binary linear):
 python experiments/v0_13_pathway/train.py --norm pathway --run-tag pathway_norm --seed 42
 ```
 
+Scoreboard: [`RESULTS.md`](RESULTS.md).  
 See [`docs/PATHWAY_NORM.md`](../../docs/PATHWAY_NORM.md).
 
 Matched-wall **PathwayNorm vs LayerNorm** (patience = full wall):
@@ -38,6 +39,10 @@ Matched-wall **PathwayNorm vs LayerNorm** (patience = full wall):
 python experiments/v0_13_pathway/compare_norms.py --seed 42
 ```
 
-PathwayNorm motif ablation (L1 scale only) and the accepted-state EMA
-update are in `train.py` (`--norm-strength 0`; `track=False` during flip
-closures). See [`docs/PATHWAY_NORM.md`](../../docs/PATHWAY_NORM.md).
+Motif isolation (pathway vs L1-only vs LayerNorm, seeds 42/0/1):
+
+```bash
+python experiments/v0_13_pathway/isolate_motif.py --seeds 42,0,1
+```
+
+Seed 42 reuses the §4 JSONs. Pass rule is in RESULTS.md §5.

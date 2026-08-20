@@ -18,6 +18,7 @@ from binary_optimizers.optimizers.pathway import PathwayOptimizer
 from binary_optimizers.store.versions import TRAIN_BUDGET_PROTOCOL, get_meta
 
 from compare_norms import COMPARE_NORMS, format_markdown, summarize
+from isolate_motif import evaluate_isolation, format_markdown as iso_md
 from model import PathwayMLP
 
 
@@ -106,6 +107,38 @@ def test_compare_norms_summary_picks_winner():
     md = format_markdown(summary)
     assert "`pathway`" in md and "`layernorm`" in md
     assert "0.6200" in md
+
+
+def test_isolation_pass_rule_fails_on_seed42_tie():
+    cells = [
+        {"seed": 42, "arm": "layernorm", "best_test_acc": 0.6514},
+        {"seed": 42, "arm": "scale_only", "best_test_acc": 0.6732},
+        {"seed": 42, "arm": "pathway", "best_test_acc": 0.6750},
+        {"seed": 0, "arm": "layernorm", "best_test_acc": 0.65},
+        {"seed": 0, "arm": "scale_only", "best_test_acc": 0.67},
+        {"seed": 0, "arm": "pathway", "best_test_acc": 0.671},
+        {"seed": 1, "arm": "layernorm", "best_test_acc": 0.64},
+        {"seed": 1, "arm": "scale_only", "best_test_acc": 0.66},
+        {"seed": 1, "arm": "pathway", "best_test_acc": 0.662},
+    ]
+    v = evaluate_isolation(cells)
+    assert v["passed"] is False
+    assert v["delta_pathway_minus_scale_only"] < 0.02
+
+
+def test_isolation_pass_rule_can_pass():
+    cells = [
+        {"seed": s, "arm": a, "best_test_acc": acc}
+        for s, accs in (
+            (42, (0.65, 0.66, 0.69)),
+            (0, (0.64, 0.65, 0.68)),
+            (1, (0.63, 0.64, 0.67)),
+        )
+        for a, acc in zip(("layernorm", "scale_only", "pathway"), accs)
+    ]
+    v = evaluate_isolation(cells)
+    assert v["passed"] is True
+    assert "PASS" in iso_md(v)
 
 
 def test_registry_v0_13_pathway():

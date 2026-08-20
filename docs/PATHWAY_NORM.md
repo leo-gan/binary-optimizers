@@ -117,6 +117,14 @@ full-wall patience:
 python experiments/v0_13_pathway/compare_norms.py --seed 42
 ```
 
+Scoreboard: [`experiments/v0_13_pathway/RESULTS.md`](../experiments/v0_13_pathway/RESULTS.md).
+
+Motif isolation (3 arms × seeds `{42,0,1}`; pass rule in RESULTS §5):
+
+```bash
+python experiments/v0_13_pathway/isolate_motif.py --seeds 42,0,1
+```
+
 ---
 
 ## Critique (after the LN bake-off)

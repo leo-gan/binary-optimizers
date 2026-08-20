@@ -140,6 +140,11 @@ every trial flip (including rejects). After fixing that:
 Tags: `cmp_pathway_fix`, `cmp_pathway_l1`. Motif vs L1 is a tie; the
 tracking fix is the gain vs LN.
 
+## Scoreboard
+
+Consolidated numbers and the pre-registered motif-isolation pass rule:
+[`RESULTS.md`](RESULTS.md).
+
 ## Defaults (existence)
 
 | Item | Value |
