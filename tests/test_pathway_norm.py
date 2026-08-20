@@ -99,6 +99,29 @@ def test_backward_through_residual():
     assert torch.isfinite(x.grad).all()
 
 
+def test_track_false_skips_ema_until_update_stats():
+    layer = PathwayNorm(4, momentum=1.0)
+    layer.track = False
+    layer.train()
+    layer(torch.ones(3, 4))
+    assert not bool(layer.initialized.item())
+    layer.update_stats(torch.ones(3, 4))
+    assert bool(layer.initialized.item())
+    acc = layer.motif_acc.clone()
+    layer(-torch.ones(3, 4))
+    assert torch.equal(layer.motif_acc, acc)
+    layer.update_stats(-torch.ones(3, 4))
+    assert not torch.equal(layer.motif_acc, acc)
+
+
+def test_strength_zero_is_l1_scale_only():
+    layer = PathwayNorm(5, momentum=1.0, strength=0.0)
+    x = torch.randn(4, 5) * 30
+    y = layer(x)
+    scale = x.abs().mean(dim=1, keepdim=True).clamp_min(layer.eps)
+    assert torch.allclose(y, x / scale, atol=1e-5)
+
+
 def test_stats_populated():
     layer = PathwayNorm(4, momentum=1.0)
     layer(torch.randn(3, 4))

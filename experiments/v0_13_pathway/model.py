@@ -32,6 +32,7 @@ class PathwayMLP(nn.Module):
         in_dim: int = 28 * 28,
         n_classes: int = 10,
         norm: NormName = "none",
+        norm_strength: float = 1.0,
         use_bn: bool = False,
     ):
         super().__init__()
@@ -43,12 +44,13 @@ class PathwayMLP(nn.Module):
         self.in_dim = in_dim
         self.n_classes = n_classes
         self.norm_name: NormName = norm
+        self.norm_strength = float(norm_strength)
         self.use_bn = norm == "bn"
 
         self.flatten = nn.Flatten()
         self.fc1 = BitLinearSTE(in_dim, hidden_dim, bias=False)
         if norm == "pathway":
-            self.norm: nn.Module = PathwayNorm(hidden_dim)
+            self.norm: nn.Module = PathwayNorm(hidden_dim, strength=self.norm_strength)
         elif norm == "layernorm":
             self.norm = nn.LayerNorm(hidden_dim, elementwise_affine=False)
         elif norm == "bn":
@@ -77,6 +79,9 @@ class PathwayMLP(nn.Module):
         if isinstance(n, PathwayNorm):
             return n.stats()
         return {}
+
+    def hidden_preact(self, x: torch.Tensor) -> torch.Tensor:
+        return self.fc1(self.flatten(x))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.flatten(x)

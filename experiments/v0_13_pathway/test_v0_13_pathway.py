@@ -13,6 +13,7 @@ _REPO = _THIS.parents[1]
 sys.path.insert(0, str(_REPO))
 sys.path.insert(0, str(_THIS))
 
+from binary_optimizers.models.pathway_norm import PathwayNorm
 from binary_optimizers.optimizers.pathway import PathwayOptimizer
 from binary_optimizers.store.versions import TRAIN_BUDGET_PROTOCOL, get_meta
 
@@ -65,6 +66,14 @@ def test_pathway_norm_hidden_is_order_one():
     assert h.abs().mean().item() < 5.0
     stats = model.norm_stats()
     assert "agreement" in stats
+
+
+def test_pathway_norm_strength_zero_constructs():
+    model = PathwayMLP(hidden_dim=8, in_dim=16, n_classes=3, norm="pathway", norm_strength=0.0)
+    assert isinstance(model.norm, PathwayNorm)
+    assert model.norm.strength == 0.0
+    h = model.hidden_preact(torch.randn(2, 16))
+    assert h.shape == (2, 8)
 
 
 def test_compare_norms_summary_picks_winner():

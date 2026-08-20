@@ -37,3 +37,7 @@ Matched-wall **PathwayNorm vs LayerNorm** (patience = full wall):
 ```bash
 python experiments/v0_13_pathway/compare_norms.py --seed 42
 ```
+
+PathwayNorm motif ablation (L1 scale only) and the accepted-state EMA
+update are in `train.py` (`--norm-strength 0`; `track=False` during flip
+closures). See [`docs/PATHWAY_NORM.md`](../../docs/PATHWAY_NORM.md).

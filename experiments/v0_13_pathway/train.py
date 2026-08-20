@@ -31,6 +31,8 @@ from binary_optimizers.training.budget import (  # noqa: E402
 )
 from binary_optimizers.training.loops import set_seed  # noqa: E402
 
+from binary_optimizers.models.pathway_norm import PathwayNorm  # noqa: E402
+
 from model import PathwayMLP  # noqa: E402
 
 EXPERIMENT_ID = "v0_13_pathway"
@@ -51,6 +53,11 @@ def evaluate(model, loader, device: str) -> tuple[float, float]:
     return correct / max(1, total), loss_sum / max(1, total)
 
 
+def _pathway_norm(model) -> PathwayNorm | None:
+    n = getattr(model, "norm", None)
+    return n if isinstance(n, PathwayNorm) else None
+
+
 def train_one_epoch(model, opt: PathwayOptimizer, loader, device: str) -> tuple[float, float, float, float]:
     model.train()
     total = correct = 0
@@ -58,6 +65,9 @@ def train_one_epoch(model, opt: PathwayOptimizer, loader, device: str) -> tuple[
     accepted = proposed = 0
     n_steps = 0
     need_grad = opt.ranking == "ste_topk" or opt.mode == "hybrid"
+    pn = _pathway_norm(model)
+    if pn is not None:
+        pn.track = False
 
     for x, y in loader:
         x, y = x.to(device), y.to(device)
@@ -71,6 +81,9 @@ def train_one_epoch(model, opt: PathwayOptimizer, loader, device: str) -> tuple[
             return loss, logits
 
         loss = opt.step(closure)
+        if pn is not None:
+            with torch.no_grad():
+                pn.update_stats(model.hidden_preact(x))
         with torch.no_grad():
             logits = model(x)
             pred = logits.argmax(1)
@@ -98,6 +111,7 @@ def train_run(
     bn_lr: float,
     use_bn: bool,
     norm: str,
+    norm_strength: float = 1.0,
     seed: int,
     device: str,
     train_loader,
@@ -106,7 +120,12 @@ def train_run(
     run_tag: str = "default",
 ) -> Dict[str, Any]:
     set_seed(seed)
-    model = PathwayMLP(hidden_dim=hidden, norm=norm, use_bn=use_bn).to(device)  # type: ignore[arg-type]
+    model = PathwayMLP(
+        hidden_dim=hidden,
+        norm=norm,  # type: ignore[arg-type]
+        norm_strength=norm_strength,
+        use_bn=use_bn,
+    ).to(device)
     opt = PathwayOptimizer(
         model.parameters(),
         candidates=candidates,
@@ -193,6 +212,7 @@ def train_run(
         "assembly_of": assembly_of,
         "use_bn": use_bn,
         "norm": model.norm_name,
+        "norm_strength": model.norm_strength,
         "bn_lr": bn_lr,
         "device": device,
         "epochs_ran": len(history),
@@ -241,6 +261,7 @@ def train_run(
                 "assembly_of": assembly_of,
                 "use_bn": use_bn,
                 "norm": model.norm_name,
+                "norm_strength": model.norm_strength,
                 "budget": budget.to_dict(),
             },
         )
@@ -288,6 +309,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Hidden-activation norm after the first binary linear",
     )
     p.add_argument(
+        "--norm-strength",
+        type=float,
+        default=1.0,
+        help="PathwayNorm motif subtract strength (0 = L1 scale only)",
+    )
+    p.add_argument(
         "--bn",
         action="store_true",
         help="Deprecated: same as --norm bn",
@@ -328,6 +355,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         bn_lr=args.bn_lr,
         use_bn=args.bn,
         norm=args.norm,
+        norm_strength=args.norm_strength,
         seed=args.seed,
         device=device,
         train_loader=train_loader,

@@ -128,6 +128,18 @@ Writes `results/v0_13_pathway/compare_norms_seed42.{json,md}` plus per-arm
 LayerNorm wins by 1.46 pp. Both beat the no-norm existence cell (0.6103).
 One seed; not a Swarm comparison.
 
+**Superseded for PathwayNorm:** that 0.6368 cell updated the motif EMA on
+every trial flip (including rejects). After fixing that:
+
+| Arm | Best test | Best ep | Accept |
+|-----|----------:|--------:|-------:|
+| PathwayNorm, EMA on accepted state | **0.6750** | 16 | ~0.40 |
+| PathwayNorm, `strength=0` (L1 only) | 0.6732 | 13 | ~0.32 |
+| LayerNorm (table above) | 0.6514 | 16 | ~0.33 |
+
+Tags: `cmp_pathway_fix`, `cmp_pathway_l1`. Motif vs L1 is a tie; the
+tracking fix is the gain vs LN.
+
 ## Defaults (existence)
 
 | Item | Value |

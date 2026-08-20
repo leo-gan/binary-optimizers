@@ -83,6 +83,11 @@ batch 1). Motif is **per channel** (the assembled feature).
 
 Eval uses the frozen EMAs (BatchNorm-style memory, LayerNorm-style scale).
 
+**Flip-search rule:** `forward` updates EMAs only when `track=True`. The
+v0.13 train loop sets `track=False` during the \(1+k\) trial closures and
+calls `update_stats` once on the **accepted** hidden state. Updating on
+rejected flips pollutes the motif (see critique below).
+
 ---
 
 ## What this is not
@@ -111,3 +116,39 @@ full-wall patience:
 ```bash
 python experiments/v0_13_pathway/compare_norms.py --seed 42
 ```
+
+---
+
+## Critique (after the LN bake-off)
+
+The useful piece is **per-sample L1 scale**. That is why CE dropped from
+~45 to ~2. The “assembled motif” is a lagged per-channel L1 mean of
+signs, not a reusable building block:
+
+- The same motif is subtracted from every sample. A class-selective
+  channel is pushed toward a global firing-rate prototype — the opposite
+  of a pathway that depends on the input.
+- Agreement froze at ~0.36. Residual L1 never shrank (~20.7). The motif
+  does not capture more of \(x\) as training proceeds.
+- Subtracting \(\mathrm{sign}(\mathrm{EMA}[s])\cdot\mathrm{EMA}[\lvert x\rvert]\)
+  is homeostasis + scale, close to `HomeostaticThreshold`, not assembly.
+- **Bug (fixed):** trial flips inside `PathwayOptimizer.step` used to
+  update the EMA. Rejected hypotheses wrote the memory. Accept rate rose
+  ~0.33 → ~0.40 after updating only the accepted state.
+
+Ablation (`strength=0`, L1 scale only, same tracking fix, same wall)
+matched motif-on within noise. Keep the motif as the designed object;
+do not claim it is why the net learns.
+
+---
+
+## Follow-up cells (seed 42, 1200 s, `patience_frac=1`)
+
+| Arm | Best test | Best ep | Accept | vs LN 0.6514 |
+|-----|----------:|--------:|-------:|-------------:|
+| PathwayNorm, EMA on every trial (old) | 0.6368 | 14 | ~0.33 | −1.46 pp |
+| LayerNorm, no affine | 0.6514 | 16 | ~0.33 | — |
+| **PathwayNorm, EMA on accepted state only** | **0.6750** | 16 | ~0.40 | **+2.36 pp** |
+| PathwayNorm, `strength=0` (L1 only) | 0.6732 | 13 | ~0.32 | +2.18 pp |
+
+One seed. Motif vs L1 is a tie. The tracking fix is the real gain.

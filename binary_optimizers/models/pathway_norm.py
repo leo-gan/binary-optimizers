@@ -48,6 +48,9 @@ class PathwayNorm(nn.Module):
         self.eps = float(eps)
         self.strength = float(strength)
         self.binarize = bool(binarize)
+        # When False, forward does not touch EMAs. Flip-search closures must
+        # leave this False; call update_stats() once on the accepted state.
+        self.track = True
 
         self.register_buffer("motif_acc", torch.zeros(num_features))
         self.register_buffer("abs_acc", torch.ones(num_features))
@@ -82,6 +85,25 @@ class PathwayNorm(nn.Module):
         dims = [0] + list(range(2, t.ndim))
         return t.mean(dim=dims)
 
+    @torch.no_grad()
+    def update_stats(self, x: torch.Tensor) -> None:
+        """EMA update from an activation batch (accepted state only)."""
+        if x.ndim < 2 or x.shape[1] != self.num_features:
+            raise ValueError(
+                f"update_stats expected [N, {self.num_features}, …], got {tuple(x.shape)}"
+            )
+        signs = _sign_pm1(x)
+        batch_sign = self._batch_spatial_mean(signs)
+        batch_abs = self._batch_spatial_mean(x.abs())
+        if not bool(self.initialized.item()):
+            self.motif_acc.copy_(batch_sign)
+            self.abs_acc.copy_(batch_abs)
+            self.initialized.fill_(True)
+        else:
+            m = self.momentum
+            self.motif_acc.mul_(1.0 - m).add_(batch_sign, alpha=m)
+            self.abs_acc.mul_(1.0 - m).add_(batch_abs, alpha=m)
+
     def stats(self) -> dict[str, float]:
         return {
             "agreement": self.last_agreement,
@@ -98,18 +120,8 @@ class PathwayNorm(nn.Module):
             )
 
         signs = _sign_pm1(x)
-        if self.training:
-            with torch.no_grad():
-                batch_sign = self._batch_spatial_mean(signs)
-                batch_abs = self._batch_spatial_mean(x.detach().abs())
-                if not bool(self.initialized.item()):
-                    self.motif_acc.copy_(batch_sign)
-                    self.abs_acc.copy_(batch_abs)
-                    self.initialized.fill_(True)
-                else:
-                    m = self.momentum
-                    self.motif_acc.mul_(1.0 - m).add_(batch_sign, alpha=m)
-                    self.abs_acc.mul_(1.0 - m).add_(batch_abs, alpha=m)
+        if self.training and self.track:
+            self.update_stats(x.detach())
 
         motif_dir = self.motif_dir()
         assembled = self._channel_view(motif_dir * self.abs_acc, x).detach()
