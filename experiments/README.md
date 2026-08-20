@@ -16,6 +16,8 @@ discrete **optimizers** (latent-free). See the project [README](../README.md),
 | `v0_5_width_register` / `v0_5_width_unary` | WP1 width atlas |
 | `v0_6_encoding` | WP2 encoding atlas (MNIST) |
 | `v0_7_cifar_encoding` | WP3 sparse CIFAR fixed vs exp/mant |
+| `v0_8_unary_link` … `v0_12_unary_cifar` | Unary link Swarm ladder |
+| `v0_13_pathway` | Pathway optimizer (sampled ±1 flips + zlib \(\widehat{A}\)) |
 | `ste_vs_swarm` | Optional STE comparison (not the main goal) |
 
 Each package has `PROTOCOL.md`, `train.py`, and usually tests. Shared helpers:

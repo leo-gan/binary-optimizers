@@ -132,6 +132,15 @@ REGISTRY: dict[str, dict[str, Any]] = {
             "WP-U5: sparse CIFAR-10 flat MLP scale probe for Unary link Swarm."
         ),
     },
+    "v0_13_pathway": {
+        "parent": "v0_1",
+        "code_dir": "experiments/v0_13_pathway",
+        "protocol": TRAIN_BUDGET_PROTOCOL,
+        "changelog": (
+            "Pathway optimizer: sampled ±1 flips accepted by ΔL + λ ΔA "
+            "(zlib packed-sign assembly proxy); pure wall budget."
+        ),
+    },
 }
 
 

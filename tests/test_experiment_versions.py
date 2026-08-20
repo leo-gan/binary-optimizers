@@ -57,5 +57,17 @@ def test_config_version_fields_keys():
 
 
 def test_registry_parents_unique_from_ids():
+    # First-of-line ids may parent themselves (v0_8 started the unary ladder).
+    allowed_self = {"v0_8_unary_link"}
     for eid, m in REGISTRY.items():
+        if eid in allowed_self:
+            continue
         assert m["parent"] != eid
+
+
+def test_v0_13_pathway_registered():
+    m = get_meta("v0_13_pathway")
+    assert m["code_dir"] == "experiments/v0_13_pathway"
+    assert m["protocol"] == TRAIN_BUDGET_PROTOCOL
+    assert m["parent"] == "v0_1"
+    assert "pathway" in m["changelog"].lower()

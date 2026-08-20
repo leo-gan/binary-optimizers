@@ -60,7 +60,7 @@ Experiment IDs / re-run versioning: [docs/EXPERIMENT_VERSIONS.md](docs/EXPERIMEN
 
 ```
 binary_optimizers/   # library: optimizers, models, data, store, training budgets
-experiments/         # versioned research runs (v0_1 … v0_7_*)
+experiments/         # versioned research runs (v0_1 … v0_13_*)
 docs/                # roadmap, protocol notes, historical notebooks
 scripts/             # dataset download, report helpers
 results/             # local run outputs (gitignored)
