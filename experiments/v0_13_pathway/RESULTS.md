@@ -95,3 +95,19 @@ python experiments/v0_13_pathway/isolate_motif.py --seeds 42,0,1
 ```
 
 Writes `results/v0_13_pathway/isolate_motif_summary.{json,md}`.
+
+### Verdict: **FAIL**
+
+| seed | layernorm | scale_only | pathway | pathway − scale | pathway − LN |
+|-----:|----------:|-----------:|--------:|----------------:|-------------:|
+| 42 | 0.6514 | 0.6732 | 0.6750 | +0.18 pp | +2.36 pp |
+| 0 | 0.6667 | 0.6564 | 0.6714 | +1.50 pp | +0.47 pp |
+| 1 | **0.6865** | 0.6697 | 0.6540 | −1.57 pp | −3.25 pp |
+| **mean** | **0.6682** | 0.6664 | 0.6668 | **+0.04 pp** | **−0.14 pp** |
+
+Motif > L1 on 2/3 seeds, but both mean deltas are ≪ 2 pp. Mean PathwayNorm
+≈ mean L1 ≈ mean LayerNorm. The motif subtract is **not** why anyone
+beats LN; on seed 1 LayerNorm is the best arm.
+
+Tags: `iso_*_s{0,1}` plus reused `cmp_layernorm_seed42`,
+`cmp_pathway_l1_seed42`, `cmp_pathway_fix_seed42`.

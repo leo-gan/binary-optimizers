@@ -143,7 +143,8 @@ tracking fix is the gain vs LN.
 ## Scoreboard
 
 Consolidated numbers and the pre-registered motif-isolation pass rule:
-[`RESULTS.md`](RESULTS.md).
+[`RESULTS.md`](RESULTS.md). Isolation **FAIL** (means: LN 0.6682, L1 0.6664,
+motif 0.6668).
 
 ## Defaults (existence)
 

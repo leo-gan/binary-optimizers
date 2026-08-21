@@ -160,3 +160,7 @@ do not claim it is why the net learns.
 | PathwayNorm, `strength=0` (L1 only) | 0.6732 | 13 | ~0.32 | +2.18 pp |
 
 One seed. Motif vs L1 is a tie. The tracking fix is the real gain.
+
+Isolation panel (seeds `{42,0,1}`, same wall, pass rule in RESULTS §5):
+**FAIL.** Means: LN 0.6682, L1 0.6664, motif 0.6668. Δ(motif−L1)=+0.04 pp,
+Δ(motif−LN)=−0.14 pp. Seed 1 LayerNorm 0.6865 is the best single cell.
