@@ -526,6 +526,8 @@ CIFAR flat MLP (absolute acc low; relative law holds).
 | `v0_5_width_register` | Question A, carry-safe binary | Done (sketch) |
 | `v0_6_encoding` | Question B, exp vs mantissa (MNIST) | Done (sketch) |
 | `v0_7_cifar_encoding` | WP3 sparse fixed vs exp/mant on CIFAR | Done (sparse) |
+| `v0_13_pathway` | Pathway optimizer: sampled ±1 flips + zlib \(\widehat{A}\) | Existence (library + protocol) |
+| `v0_13` `--norm pathway` | PathwayNorm: running ±1 motif + L1 residual scale | Implemented (library + hook) |
 | Optional next | Stronger CIFAR net / deeper MLP; n=32 rescue; pure-wall full grids | Open |
 
 PROTOCOLS under `experiments/<id>/PROTOCOL.md`; notes in `experiments/v0_*_NOTES.md`;
@@ -544,7 +546,9 @@ log to DuckDB (`binary_optimizers.store`) when useful. Protocol revs: see
    - stronger CIFAR model (conv) still under latent-free register/encoding;  
    - n=32 encoding rescue probe;  
    - pure-wall full atlases under `*_1` experiment ids;  
-   - push the stack further toward integer/binary signals (longer-term grand goal).  
+   - push the stack further toward integer/binary signals (longer-term grand goal);  
+   - **pathway optimizer** (`v0_13_pathway`): discrete flip search with a
+     compression assembly proxy — a separate line from Swarm encodings.  
 5. Keep train protocol as **pure wall** by default (`docs/TRAIN_BUDGET.md`).
 
 **Default scaffold:** v0.3 carry-safe for register **and** encoding experiments;
