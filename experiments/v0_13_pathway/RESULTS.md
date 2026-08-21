@@ -4,8 +4,9 @@ All numbers MNIST, \(H=128\), `PathwayOptimizer` (\(k=8\), \(\lambda=0.1\),
 `ste_topk`), seed noted. Wall protocol `pure_wall_budget_v1`. Artifacts
 under `results/v0_13_pathway/` (gitignored).
 
-This file is the scoreboard. Isolation **pass rule** is pre-registered
-below; seeds `{0,1}` were not run when this section was written.
+**Headline:** flip search exists (0.6103, no hidden norm). A hidden scale
+helps. The pathway **motif** does not: isolation on seeds `{42,0,1}`
+**FAIL**s (means LN 0.6682, L1 0.6664, motif 0.6668).
 
 ---
 
